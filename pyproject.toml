@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "odin-foundation"
+version = "1.0.3"
+description = "Official Python implementation of ODIN (Open Data Interchange Notation)"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+    { name = "ODIN Foundation", email = "contact@odin.foundation" }
+]
+keywords = ["odin", "data-interchange", "notation", "parser", "serializer", "schema", "validation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Markup",
+    "Typing :: Typed",
+]
+requires-python = ">=3.8"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "mypy>=1.0",
+    "ruff>=0.1.0",
+    "black>=23.0",
+]
+
+[project.urls]
+Homepage = "https://odin.foundation"
+Documentation = "https://odin.foundation/docs"
+Repository = "https://github.com/odin-foundation/odin-python"
+Issues = "https://github.com/odin-foundation/odin-python/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["odin"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "golden: marks tests as golden tests (shared across implementations)",
+]
+
+[tool.mypy]
+python_version = "3.8"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+select = ["E", "F", "I", "N", "W", "UP", "B"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
