@@ -519,6 +519,20 @@ def _try_output_tabular(
         if idx != i:
             return False
 
+    # Reject tabular if any element has a variable-length sub-array (an indexed
+    # child like `fields[N]`) that is sparse across rows.
+    for col in all_columns:
+        if not col.endswith(']'):
+            continue
+        open_idx = col.rfind('[')
+        if open_idx <= 0:
+            continue
+        if not col[open_idx + 1:-1].isdigit():
+            continue
+        for fields in items.values():
+            if col not in fields:
+                return False
+
     columns = list(all_columns)
     if opts.sort_paths:
         columns.sort(key=_tabular_column_sort_key)

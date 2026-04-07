@@ -495,6 +495,10 @@ class OdinParser:
                 new_header = last_absolute_header + "." + rel_path
             else:
                 new_header = rel_path
+            # Tabular relative header: {.items[] : col1, col2} or {.items[] : ~}
+            if new_header.endswith("[]") and is_tabular and tabular_columns:
+                base = new_header[:-2]
+                return pos, new_header, None, False, True, tabular_columns, base
             return pos, new_header, None, False, False, None, None
 
         # Tabular header: path ends with []
