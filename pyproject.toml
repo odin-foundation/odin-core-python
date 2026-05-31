@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "odin-foundation"
-version = "1.0.6"
+version = "1.1.0"
 description = "Official Python implementation of ODIN (Open Data Interchange Notation)"
 readme = "README.md"
 license = "Apache-2.0"
