@@ -89,16 +89,20 @@ def validate(
     if options.fail_fast and errors:
         return ValidationResult(valid=False, errors=errors, warnings=warnings)
 
+    # Expand type compositions and field-level type references into concrete
+    # fields (e.g. customer._composition: @a & @b -> customer.<fields>).
+    expanded_fields = _expand_type_compositions(doc, schema, type_registry)
+
     # ------------------------------------------------------------------
     # Per-field validation: V001, V002, V003, V004, V005, V010
     # ------------------------------------------------------------------
-    for field_path, schema_field in schema.fields.items():
+    for field_path, schema_field in expanded_fields.items():
         value = doc.get(field_path)
 
         # V010 / V001: Conditional requirements
         if schema_field.conditionals:
             cond_required = _evaluate_conditionals(
-                schema_field.conditionals, doc, schema_field.required
+                schema_field.conditionals, doc, schema_field.required, field_path
             )
         else:
             cond_required = schema_field.required
@@ -268,14 +272,19 @@ def _evaluate_conditionals(
     conditionals: List[SchemaConditional],
     doc: OdinDocument,
     base_required: bool,
+    field_path: str = "",
 ) -> bool:
     """Evaluate conditional requirements on a field.
 
     If all conditions are met, the field is required.
     If any condition is not met, the field requirement falls back to base_required.
     """
+    parent = field_path[: field_path.rfind(".")] if "." in field_path else ""
     for cond in conditionals:
-        cond_field_value = doc.get(cond.field)
+        cond_field = cond.field
+        if "." not in cond_field and parent:
+            cond_field = f"{parent}.{cond_field}"
+        cond_field_value = doc.get(cond_field)
         raw = _extract_raw_value(cond_field_value) if cond_field_value is not None else None
 
         met = _compare_values(raw, cond.operator, cond.value)
@@ -539,6 +548,17 @@ def _check_invariant(
     if not expr:
         return
 
+    # Spec: any present-but-null operand makes the invariant evaluate to false.
+    if _has_null_operand(expr, section_path, doc):
+        errors.append(ValidationError(
+            path=section_path,
+            code="V008",
+            message=f"Invariant violation: {expr}",
+            expected=f"{expr} to be true",
+            actual="null operand",
+        ))
+        return
+
     # Parse binary expression: left op right
     operators = ["!=", ">=", "<=", "=", ">", "<"]
     op = None
@@ -572,6 +592,28 @@ def _check_invariant(
             expected=f"{left_str} {op} {right_str}",
             actual=f"{left_val} vs {right_val}",
         ))
+
+
+_INVARIANT_KEYWORDS = {"true", "false"}
+
+
+def _has_null_operand(expr: str, section_path: str, doc: OdinDocument) -> bool:
+    """Return True if any field operand is present in the document with a null value.
+
+    Absent fields are not treated as null operands; their absence is handled by
+    field-level required validation.
+    """
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", expr)
+    for token in tokens:
+        if token in _INVARIANT_KEYWORDS:
+            continue
+        full_path = f"{section_path}.{token}" if section_path else token
+        value = doc.get(full_path)
+        if value is None and section_path:
+            value = doc.get(token)
+        if isinstance(value, OdinNull):
+            return True
+    return False
 
 
 def _resolve_invariant_value(
@@ -860,6 +902,101 @@ def lookup_type(
     return schema.types.get(name)
 
 
+def _split_typeref_members(name: str) -> List[str]:
+    """Split an intersection typeRef name (a&b) into its member type names."""
+    return [n.strip() for n in name.split("&") if n.strip()]
+
+
+def _object_present(doc: OdinDocument, path: str) -> bool:
+    """True if the path itself or any descendant path holds a value."""
+    if doc.get(path) is not None:
+        return True
+    prefix = path + "."
+    return any(p.startswith(prefix) for p in doc.paths())
+
+
+def _expand_type_compositions(
+    doc: OdinDocument,
+    schema: OdinSchema,
+    type_registry: Optional[Dict[str, Any]] = None,
+) -> Dict[str, SchemaField]:
+    """Expand object compositions and field-level type references into fields.
+
+    - A `<path>._composition` typeRef merges every referenced (and intersected)
+      type's fields under the parent path.
+    - A field typed `@SomeType` enforces that type's fields under the field path
+      when the sub-object is present or the field is required.
+    """
+    result: Dict[str, SchemaField] = {}
+
+    # First pass: expand explicit compositions.
+    for path, fld in schema.fields.items():
+        if path.endswith("._composition") and isinstance(fld.field_type, TypeRefType):
+            parent = path[: -len("._composition")]
+            for member in _split_typeref_members(fld.field_type.name):
+                type_def = lookup_type(schema, member, type_registry)
+                if type_def:
+                    for field_name, type_field in type_def.fields.items():
+                        if field_name == "_composition":
+                            continue
+                        full = f"{parent}.{field_name}"
+                        result[full] = _rebind(type_field, full)
+
+    # Second pass: explicit fields (override inherited, skip composition markers).
+    for path, fld in schema.fields.items():
+        if path.endswith("._composition"):
+            continue
+        result[path] = fld
+
+    # Third pass: a field typed @SomeType enforces the referenced type's fields.
+    for path, fld in list(result.items()):
+        if path.endswith("._composition"):
+            continue
+        ref_name = None
+        if isinstance(fld.field_type, TypeRefType):
+            ref_name = fld.field_type.name
+        elif isinstance(fld.field_type, ReferenceType):
+            ref_name = fld.field_type.target_path
+        if not ref_name:
+            continue
+
+        members = _split_typeref_members(ref_name)
+        type_defs = [t for t in (lookup_type(schema, m, type_registry) for m in members) if t]
+        if not type_defs:
+            continue  # runtime reference, not a defined type
+
+        if not _object_present(doc, path) and not fld.required:
+            continue
+
+        for type_def in type_defs:
+            for field_name, type_field in type_def.fields.items():
+                if field_name == "_composition":
+                    continue
+                full = f"{path}.{field_name}"
+                if full not in result:
+                    result[full] = _rebind(type_field, full)
+
+    return result
+
+
+def _rebind(field_def: SchemaField, new_path: str) -> SchemaField:
+    """Copy a SchemaField under a new path (shallow, preserves type/constraints)."""
+    return SchemaField(
+        path=new_path,
+        field_type=field_def.field_type,
+        required=field_def.required,
+        nullable=field_def.nullable,
+        redacted=field_def.redacted,
+        deprecated=field_def.deprecated,
+        computed=field_def.computed,
+        immutable=field_def.immutable,
+        constraints=list(field_def.constraints),
+        conditionals=list(field_def.conditionals),
+        default_value=field_def.default_value,
+        description=field_def.description,
+    )
+
+
 def _check_schema_references(
     schema: OdinSchema,
     errors: List[ValidationError],
@@ -869,20 +1006,21 @@ def _check_schema_references(
     """Check V012/V013 for schema-level type references."""
     all_type_names = set(schema.types.keys())
 
-    # V013: Unresolved top-level field type references
+    # V013: Unresolved top-level field type references (intersections carry
+    # multiple &-joined member names).
     for field_path, field_def in schema.fields.items():
         if isinstance(field_def.field_type, TypeRefType):
-            name = field_def.field_type.name
-            if lookup_type(schema, name, type_registry) is None:
-                errors.append(ValidationError(
-                    path=field_path,
-                    code="V013",
-                    message=f"Unresolved type reference: @{name}",
-                    expected="defined type",
-                    actual=name,
-                ))
-                if options.fail_fast:
-                    return
+            for name in _split_typeref_members(field_def.field_type.name):
+                if lookup_type(schema, name, type_registry) is None:
+                    errors.append(ValidationError(
+                        path=field_path,
+                        code="V013",
+                        message=f"Unresolved type reference: @{name}",
+                        expected="defined type",
+                        actual=name,
+                    ))
+                    if options.fail_fast:
+                        return
 
     # V012: Circular schema type references among locally defined types
     type_refs: Dict[str, List[str]] = {}

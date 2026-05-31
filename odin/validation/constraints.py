@@ -12,10 +12,30 @@ from odin.types.schema import (
 )
 
 
+_TEMPORAL_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}([T ][0-9:.+\-Zz]+)?$|^\d{2}:\d{2}(:\d{2})?$"
+)
+
+
 def check_bounds(value: Any, constraint: BoundsConstraint) -> bool:
     """Check if a value satisfies a bounds constraint."""
     if value is None:
         return True  # Null values are handled by required check
+
+    # Temporal bounds: compare ISO literals chronologically.
+    if _is_temporal_bound(constraint):
+        v = _temporal_key(value)
+        if v is None:
+            return True
+        if constraint.min is not None:
+            mn = _temporal_key(constraint.min)
+            if mn is not None and v < mn:
+                return False
+        if constraint.max is not None:
+            mx = _temporal_key(constraint.max)
+            if mx is not None and v > mx:
+                return False
+        return True
 
     # For strings, check length
     if isinstance(value, str):
@@ -80,6 +100,24 @@ def check_format(value: Any, format_name: str) -> bool:
         return all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
 
     return True  # Unknown format - pass
+
+
+def _is_temporal_bound(constraint: BoundsConstraint) -> bool:
+    """A bound is temporal when either edge is an ISO date/time/timestamp literal."""
+    for edge in (constraint.min, constraint.max):
+        if isinstance(edge, str) and _TEMPORAL_RE.match(edge.strip()):
+            return True
+    return False
+
+
+def _temporal_key(value: Any) -> Optional[str]:
+    """Normalize a temporal value to a comparable ISO string."""
+    from datetime import date, datetime
+
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    s = str(value).strip()
+    return s if s else None
 
 
 def _to_number(value: Any) -> Optional[Union[int, float]]:

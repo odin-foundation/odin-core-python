@@ -290,6 +290,11 @@ class SchemaParser:
                 self._parse_array_constraints(self.arrays[self._current_array_path], right)
             return
 
+        # Type composition: = @type1 & @type2 (empty left side)
+        if not left and right.startswith("@"):
+            self._parse_type_composition(right)
+            return
+
         field_name = left
 
         # Build full path
@@ -320,6 +325,37 @@ class SchemaParser:
         else:
             self.fields[full_path] = schema_field
 
+    def _parse_type_composition(self, text: str) -> None:
+        """Parse type composition: = @type1 & @type2 [:override]."""
+        text = text.strip()
+        has_override = ":override" in text
+        body = text.split(":override", 1)[0]
+        refs: List[str] = []
+        for part in body.split("&"):
+            part = part.strip()
+            if part.startswith("@"):
+                refs.append(part[1:].strip())
+            elif part:
+                refs.append(part)
+        refs = [r for r in refs if r]
+        if not refs:
+            return
+
+        comp = SchemaField(
+            path="",
+            field_type=TypeRefType(name="&".join(refs), override=has_override),
+        )
+
+        if self._current_header_kind == "type" and self._current_type_name:
+            self.types[self._current_type_name].fields["_composition"] = comp
+        elif self._current_header_kind == "array" and self._current_array_path:
+            if self._current_array_path in self.arrays:
+                self.arrays[self._current_array_path].item_fields["_composition"] = comp
+        elif self._current_header_kind == "object" and self._current_header:
+            self.fields[f"{self._current_header}._composition"] = comp
+        else:
+            self.fields["_composition"] = comp
+
     def _parse_field_spec(self, path: str, spec: str) -> SchemaField:
         """Parse the right side of a field definition."""
         sf = SchemaField(path=path)
@@ -345,13 +381,28 @@ class SchemaParser:
 
         remaining = spec[pos:].strip()
 
-        # Parse type and constraints from remaining
-        sf.field_type, remaining = self._parse_type_spec(remaining)
+        # Parse type (with union members and glued :directives) and constraints.
+        sf.field_type, remaining = self._parse_type_with_union(sf, remaining)
         sf.constraints, remaining = self._parse_constraints(remaining, sf.field_type)
         sf.conditionals, remaining = self._parse_conditionals(remaining)
         self._parse_directives(sf, remaining)
+        self._parse_default_value(sf, remaining)
 
         return sf
+
+    def _parse_type_with_union(
+        self, sf: SchemaField, text: str
+    ) -> Tuple[SchemaFieldType, str]:
+        """Parse a type and any trailing union members (type1|type2|...)."""
+        first, remaining = self._parse_type_spec(text)
+        types: List[SchemaFieldType] = [first]
+        while remaining.startswith("|"):
+            remaining = remaining[1:].strip()
+            member, remaining = self._parse_type_spec(remaining)
+            types.append(member)
+        if len(types) == 1:
+            return types[0], remaining
+        return UnionType(types=types), remaining
 
     def _parse_type_spec(self, text: str) -> Tuple[SchemaFieldType, str]:
         """Parse type specifier from text, return (type, remaining_text)."""
@@ -387,10 +438,10 @@ class SchemaParser:
         elif text.startswith("@"):
             # Type reference or reference type
             rest = text[1:]
-            # Extract the name up to space, :, or end
+            # Extract the name up to space, :, |, or end
             name = ""
             i = 0
-            while i < len(rest) and rest[i] not in " \t:,)":
+            while i < len(rest) and rest[i] not in " \t:,)|":
                 name += rest[i]
                 i += 1
             remaining = rest[i:].strip()
@@ -402,7 +453,7 @@ class SchemaParser:
             algo = None
             if rest and rest[0].isalpha():
                 end = 0
-                while end < len(rest) and rest[end] not in " \t:":
+                while end < len(rest) and rest[end] not in " \t:|":
                     end += 1
                 algo = rest[:end]
                 rest = rest[end:].strip()
@@ -417,12 +468,8 @@ class SchemaParser:
         for keyword, type_cls in _KEYWORD_TYPES:
             if text.startswith(keyword):
                 after = text[len(keyword):]
-                if not after or after[0] in " \t:,)":
+                if not after or after[0] in " \t:,)|":
                     return type_cls(), after.strip()
-
-        # Check for union with |
-        if "|" in text:
-            return self._parse_union_type(text)
 
         # Default: string
         return StringType(), text
@@ -444,23 +491,6 @@ class SchemaParser:
         values = [v.strip().strip('"').strip("'") for v in enum_content.split(",")]
         remaining = text[i + 1:].strip()
         return EnumType(values=values), remaining
-
-    def _parse_union_type(self, text: str) -> Tuple[SchemaFieldType, str]:
-        """Parse union type: type1|type2|..."""
-        parts = text.split("|")
-        types: List[SchemaFieldType] = []
-        remaining = ""
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
-            t, r = self._parse_type_spec(part)
-            types.append(t)
-            if r:
-                remaining = r
-        if len(types) == 1:
-            return types[0], remaining
-        return UnionType(types=types), remaining
 
     def _parse_constraints(
         self, text: str, field_type: SchemaFieldType
@@ -596,11 +626,9 @@ class SchemaParser:
         raw_value = match.group(3).strip().strip('"').strip("'")
         remaining = match.group(4).strip()
 
-        # Resolve the conditional field path
-        if self._current_header and self._current_header_kind == "object":
-            cond_field = f"{self._current_header}.{field_name}"
-        else:
-            cond_field = field_name
+        # Store the bare condition field; resolution against the parent path
+        # happens during validation.
+        cond_field = field_name
 
         # Parse the value
         value: Union[str, int, float, bool] = raw_value
@@ -633,6 +661,15 @@ class SchemaParser:
                 text = text[10:].strip()
             else:
                 break
+
+    def _parse_default_value(self, sf: SchemaField, text: str) -> None:
+        """Capture a trailing typed/bare default value (e.g. ##3, #$5.00, 3)."""
+        text = text.strip()
+        if not text or text.startswith(":"):
+            return
+        parsed = _parse_default_from_string(sf.field_type, text)
+        if parsed is not None:
+            sf.default_value = parsed
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -676,6 +713,43 @@ def _unquote(s: str) -> str:
     if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
         return s[1:-1]
     return s
+
+
+def _parse_default_from_string(
+    field_type: SchemaFieldType, raw: str
+) -> Optional[Dict[str, Any]]:
+    """Parse a default value fragment into a typed {type, value} dict."""
+    s = raw.strip()
+    if not s:
+        return None
+
+    if s.startswith("##"):
+        return {"type": "integer", "value": int(s[2:])}
+    if s.startswith("#$"):
+        return {"type": "currency", "value": float(s[2:])}
+    if s.startswith("#%"):
+        return {"type": "percent", "value": float(s[2:])}
+    if s.startswith("#"):
+        return {"type": "number", "value": float(s[1:])}
+    if s.startswith("?"):
+        return {"type": "boolean", "value": s[1:] == "true"}
+    if s in ("true", "false"):
+        return {"type": "boolean", "value": s == "true"}
+
+    if re.match(r"^-?\d", s):
+        kind = getattr(field_type, "kind", "")
+        try:
+            if kind == "integer":
+                return {"type": "integer", "value": int(s)}
+            if kind == "currency":
+                return {"type": "currency", "value": float(s)}
+            if kind == "percent":
+                return {"type": "percent", "value": float(s)}
+            return {"type": "number", "value": float(s)}
+        except ValueError:
+            pass
+
+    return {"type": "string", "value": s.strip('"').strip("'")}
 
 
 def _parse_bound_value(s: str) -> Union[int, float, str]:
