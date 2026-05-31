@@ -29,6 +29,7 @@ from odin.transform.types import (
     TransformWarning,
 )
 from odin.transform.verb_registry import VerbRegistry
+from odin.transform.verbs.collection_verbs import _check_filter_condition
 from odin.types.document import OdinModifiers
 from odin.types.values import (
     OdinValue, OdinNull, OdinBoolean, OdinString, OdinNumber,
@@ -285,8 +286,7 @@ class TransformEngine:
     ) -> DynValue:
         # Condition check
         if segment.condition is not None:
-            cond_val = _resolve_path(ctx.source, segment.condition, ctx)
-            if not _is_truthy(cond_val):
+            if not _evaluate_condition(segment.condition, ctx.source, ctx):
                 return output
 
         # Discriminator check (only for import; export _type has empty path)
@@ -1064,6 +1064,64 @@ def _is_truthy(val: DynValue) -> bool:
     if val.is_object():
         return len(val.as_object()) > 0
     return True
+
+
+# ── Condition Evaluation ──────────────────────────────────────────────────────
+
+# Comparison operators ordered so multi-char forms match before their prefixes
+_CONDITION_OPS = ("==", "!=", "<>", "<=", ">=", "=", "<", ">")
+
+
+def _parse_condition_value(part: str) -> DynValue:
+    """Parse the right-hand literal of a condition into a DynValue."""
+    if len(part) >= 2 and part[0] == part[-1] and part[0] in ("'", '"'):
+        return DynValue.of_string(part[1:-1])
+    lower = part.lower()
+    if lower == "true":
+        return DynValue.of_bool(True)
+    if lower == "false":
+        return DynValue.of_bool(False)
+    if lower in ("null", "nil"):
+        return DynValue.of_null()
+    try:
+        return DynValue.of_integer(int(part))
+    except ValueError:
+        pass
+    try:
+        return DynValue.of_float(float(part))
+    except ValueError:
+        pass
+    return DynValue.of_string(part)
+
+
+def _split_condition(expr: str) -> Optional[tuple]:
+    """Split `path <op> value` into (path, op, value); None if no operator."""
+    for op in _CONDITION_OPS:
+        idx = expr.find(op)
+        if idx > 0:
+            return expr[:idx].strip(), op, expr[idx + len(op):].strip()
+    return None
+
+
+def _evaluate_condition(condition: str, source: DynValue, ctx: "_ExecContext") -> bool:
+    """Evaluate an _if condition: truthy path check or `path <op> value` comparison."""
+    expr = condition.strip()
+    parsed = _split_condition(expr)
+    if parsed is not None:
+        path_part, op, value_part = parsed
+        left = _resolve_path(source, _strip_path_prefix(path_part), ctx)
+        right = _parse_condition_value(value_part)
+        return _check_filter_condition(left, op, right)
+    return _is_truthy(_resolve_path(source, _strip_path_prefix(expr), ctx))
+
+
+def _strip_path_prefix(path: str) -> str:
+    """Strip a leading @ and/or . from a condition path."""
+    if path.startswith("@"):
+        path = path[1:]
+    if path.startswith("."):
+        path = path[1:]
+    return path
 
 
 # ── Confidential Enforcement ──────────────────────────────────────────────────

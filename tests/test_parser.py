@@ -784,6 +784,28 @@ class TestTabularMode:
         assert doc.get("a[0].vehicle").path == "vehicles[0]"
 
 
+class TestInlineHeaderDirective:
+    def test_inline_type_emits_synthetic_field(self):
+        doc = odin.parse('{Vehicle :type "AUTO"}\nmake = "Honda"')
+        assert doc.get("Vehicle._type").value == "AUTO"
+        assert doc.get("Vehicle.make").value == "Honda"
+
+    def test_inline_if_emits_synthetic_field(self):
+        doc = odin.parse('{DuiDetails :if "@driver.hasDui = true"}\nstate = "TX"')
+        assert doc.get("DuiDetails._if").value == "@driver.hasDui = true"
+        assert doc.get("DuiDetails.state").value == "TX"
+
+    def test_inline_directive_does_not_trigger_tabular(self):
+        doc = odin.parse('{Section :if "cond"}\nname = "X"')
+        assert doc.get("Section._if").value == "cond"
+        assert doc.get("Section.name").value == "X"
+
+    def test_tabular_colon_still_parses_columns(self):
+        doc = odin.parse('{items[] : name, qty}\n"Widget", ##10')
+        assert doc.get("items[0].name").value == "Widget"
+        assert doc.get("items[0].qty").value == 10
+
+
 # ── Document Chaining ────────────────────────────────────────────────────
 
 

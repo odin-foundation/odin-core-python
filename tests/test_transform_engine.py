@@ -4,7 +4,7 @@ import json
 import pytest
 
 from odin.transform.transform_parser import parse_transform
-from odin.transform.engine import TransformEngine
+from odin.transform.engine import TransformEngine, _evaluate_condition, _ExecContext
 from odin.transform.verb_registry import VerbRegistry, create_default_registry
 from odin.transform.dyn_value import DynValue, DynType
 from odin.transform.types import (
@@ -676,3 +676,34 @@ class TestTypeDirectives:
         result = _execute(text, {"val": "hello"})
         out = _output_dict(result)
         assert out["Val"] == "hello"
+
+
+# ── Condition Evaluation ────────────────────────────────────────────────────────
+
+
+class TestEvaluateCondition:
+    def _source(self):
+        return DynValue.of_object({
+            "hasDui": DynValue.of_bool(True),
+            "active": DynValue.of_bool(False),
+            "age": DynValue.of_integer(30),
+            "status": DynValue.of_string("active"),
+        })
+
+    def test_truthy_path_true(self):
+        assert _evaluate_condition("hasDui", self._source(), _ExecContext()) is True
+
+    def test_truthy_path_false(self):
+        assert _evaluate_condition("active", self._source(), _ExecContext()) is False
+
+    def test_equals_comparison_true(self):
+        assert _evaluate_condition('status = "active"', self._source(), _ExecContext()) is True
+
+    def test_equals_comparison_false(self):
+        assert _evaluate_condition('status = "void"', self._source(), _ExecContext()) is False
+
+    def test_numeric_greater_than(self):
+        assert _evaluate_condition("age > 18", self._source(), _ExecContext()) is True
+
+    def test_at_prefixed_path(self):
+        assert _evaluate_condition("@hasDui = true", self._source(), _ExecContext()) is True

@@ -150,6 +150,16 @@ class OdinParser:
                     tabular_columns = None
                     tabular_base = None
 
+                # Emit inline header directive as a synthetic assignment ({Section :type "v"} / {Section :if "expr"})
+                directive = getattr(self, "_pending_header_directive", None)
+                if directive is not None:
+                    key, dval = directive
+                    full_path = f"{current_header}.{key}" if current_header else key
+                    if full_path not in assigned_paths:
+                        assigned_paths.add(full_path)
+                        builder.set(full_path, OdinString(value=dval))
+                    self._pending_header_directive = None
+
                 continue
 
             # Directives (@import, @schema, @if)
@@ -301,6 +311,9 @@ class OdinParser:
         header_line = tokens[pos - 1].line
         header_col = tokens[pos - 1].column
 
+        # Inline directive ({Section :type "value"} / {Section :if "expr"}) for the caller
+        self._pending_header_directive: Optional[Tuple[str, str]] = None
+
         # Collect header content
         parts: List[str] = []
         is_meta = False
@@ -326,8 +339,21 @@ class OdinParser:
                     header_col,
                 )
 
-            # Detect tabular column separator `:` (comes as ERROR token)
+            # Detect `:` separator (comes as ERROR token)
             if t.type == TokenType.ERROR and t.value == ":":
+                # Inline directive {Section :type "value"} / {Section :if "expr"}:
+                # `:name "value"` where name is type or if and value is a quoted string
+                if (
+                    pos + 2 < end
+                    and tokens[pos + 1].type == TokenType.IDENTIFIER
+                    and tokens[pos + 1].value in ("type", "if")
+                    and tokens[pos + 2].type == TokenType.STRING_QUOTED
+                ):
+                    directive_name = tokens[pos + 1].value
+                    self._pending_header_directive = (f"_{directive_name}", tokens[pos + 2].value)
+                    pos += 3
+                    continue
+                # Tabular column separator
                 in_column_defs = True
                 is_tabular = True
                 tabular_columns = []
