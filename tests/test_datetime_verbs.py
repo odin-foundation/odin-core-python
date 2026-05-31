@@ -361,3 +361,63 @@ class TestDayOf:
         # 2024 is leap year: Jan(31) + Feb(29) + 15 = 75
         r = invoke("dayOfYear", "2024-03-15")
         assert r._int_value == 75
+
+
+# ── nextBusinessDay ──────────────────────────────────────────────────
+
+class TestNextBusinessDay:
+    def test_wednesday_to_thursday(self):
+        r = invoke("nextBusinessDay", "2024-01-17")
+        assert r.as_string() == "2024-01-18"
+
+    def test_friday_to_monday(self):
+        r = invoke("nextBusinessDay", "2024-01-19")
+        assert r.as_string() == "2024-01-22"
+
+    def test_saturday_to_monday(self):
+        r = invoke("nextBusinessDay", "2024-01-20")
+        assert r.as_string() == "2024-01-22"
+
+    def test_sunday_to_monday(self):
+        r = invoke("nextBusinessDay", "2024-01-21")
+        assert r.as_string() == "2024-01-22"
+
+    def test_no_args(self):
+        r = invoke("nextBusinessDay")
+        assert r.type == DynType.NULL
+
+
+# ── formatDuration ───────────────────────────────────────────────────
+
+class TestFormatDuration:
+    def test_seconds_full(self):
+        r = invoke("formatDuration", 90061)
+        assert r.as_string() == "1 day, 1 hour, 1 minute, 1 second"
+
+    def test_seconds_sub_day(self):
+        r = invoke("formatDuration", 3661)
+        assert r.as_string() == "1 hour, 1 minute, 1 second"
+
+    def test_seconds_as_string(self):
+        r = invoke("formatDuration", "3661")
+        assert r.as_string() == "1 hour, 1 minute, 1 second"
+
+    def test_iso_hours_minutes(self):
+        r = invoke("formatDuration", "PT2H30M")
+        assert r.as_string() == "2 hours, 30 minutes"
+
+    def test_iso_day(self):
+        r = invoke("formatDuration", "P1DT6H")
+        assert r.as_string() == "1 day, 6 hours"
+
+    def test_zero_seconds(self):
+        r = invoke("formatDuration", 0)
+        assert r.as_string() == "0 seconds"
+
+    def test_negative_seconds_null(self):
+        r = invoke("formatDuration", -5)
+        assert r.type == DynType.NULL
+
+    def test_invalid_string_null(self):
+        r = invoke("formatDuration", "not-a-duration")
+        assert r.type == DynType.NULL

@@ -578,7 +578,7 @@ def verb_business_days(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_next_business_day(args: List[DynValue], ctx: object) -> DynValue:
-    """Next weekday (Mon-Fri). Returns same day if already weekday."""
+    """Next weekday (Mon-Fri) strictly after the input. Fri->Mon, Wed->Thu, Sat/Sun->Mon."""
     if len(args) < 1:
         return DynValue.of_null()
 
@@ -587,11 +587,10 @@ def verb_next_business_day(args: List[DynValue], ctx: object) -> DynValue:
         return DynValue.of_null()
 
     d = dt.date() if isinstance(dt, datetime) else dt
-    dow = d.weekday()  # 0=Mon, 6=Sun
 
-    if dow == 5:  # Saturday
-        d = d + timedelta(days=2)
-    elif dow == 6:  # Sunday
+    # Always advance at least one day, then skip weekends.
+    d = d + timedelta(days=1)
+    while d.weekday() >= 5:  # 5=Sat, 6=Sun
         d = d + timedelta(days=1)
 
     return DynValue.of_string(format_iso_date(d))
@@ -602,25 +601,50 @@ def verb_next_business_day(args: List[DynValue], ctx: object) -> DynValue:
 import re as _re_dt
 
 
+def _expand_seconds(total: float):
+    """Split a positive second count into (days, hours, minutes, seconds)."""
+    days_val = int(total // 86400)
+    total -= days_val * 86400
+    hours = int(total // 3600)
+    total -= hours * 3600
+    minutes = int(total // 60)
+    seconds = total - minutes * 60
+    return days_val, hours, minutes, seconds
+
+
 def verb_format_duration(args: List[DynValue], ctx: object) -> DynValue:
-    """Format ISO 8601 duration as human-readable text."""
+    """Format a number of seconds or an ISO 8601 duration as human-readable text."""
     if len(args) < 1:
         return DynValue.of_null()
 
-    s = coerce_str(args[0])
-    if not s:
-        return DynValue.of_null()
+    years = months = days_val = hours = minutes = 0
+    seconds: float = 0
 
-    m = _re_dt.match(r"^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$", s)
-    if not m:
-        return DynValue.of_null()
+    arg = args[0]
+    if arg.is_number():
+        # Numeric seconds: expand into days/hours/minutes/seconds.
+        total = arg.as_float()
+        if total != total or total in (float("inf"), float("-inf")) or total < 0:
+            return DynValue.of_null()
+        days_val, hours, minutes, seconds = _expand_seconds(total)
+    else:
+        s = coerce_str(arg)
+        if not s:
+            return DynValue.of_null()
 
-    years = int(m.group(1) or 0)
-    months = int(m.group(2) or 0)
-    days_val = int(m.group(3) or 0)
-    hours = int(m.group(4) or 0)
-    minutes = int(m.group(5) or 0)
-    seconds = float(m.group(6) or 0)
+        if _re_dt.match(r"^\d+(?:\.\d+)?$", s):
+            # Numeric seconds passed as a string.
+            days_val, hours, minutes, seconds = _expand_seconds(float(s))
+        else:
+            m = _re_dt.match(r"^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$", s)
+            if not m:
+                return DynValue.of_null()
+            years = int(m.group(1) or 0)
+            months = int(m.group(2) or 0)
+            days_val = int(m.group(3) or 0)
+            hours = int(m.group(4) or 0)
+            minutes = int(m.group(5) or 0)
+            seconds = float(m.group(6) or 0)
 
     parts = []
     if years > 0:
