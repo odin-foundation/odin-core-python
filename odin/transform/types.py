@@ -164,6 +164,8 @@ class TransformSegment:
     children: List[TransformSegment] = field(default_factory=list)
     pass_num: Optional[int] = None
     condition: Optional[str] = None
+    condition_expr: Optional[FieldExpression] = None
+    branch: Optional[str] = None  # 'if' | 'elif' | 'else' for conditional chains
 
 
 # ── Source / Target Config ─────────────────────────────────────────────────────

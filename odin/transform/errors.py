@@ -51,6 +51,9 @@ class TransformErrorCodes:
     # Incompatible or unknown conversion target
     T011_INCOMPATIBLE_CONVERSION = "T011"
 
+    # Conditional branch (elif/else) with no preceding if
+    T012_DANGLING_BRANCH = "T012"
+
     # Extended codes (implementation-specific)
     CONFIG_ERROR = "CONFIG_ERROR"
     UNKNOWN_RECORD_TYPE = "UNKNOWN_RECORD_TYPE"
@@ -175,6 +178,15 @@ def incompatible_conversion_error(
         code=TransformErrorCodes.T011_INCOMPATIBLE_CONVERSION,
         message=f"Incompatible conversion in '{verb}': {detail}",
         path=field,
+    )
+
+
+def dangling_branch_error(directive: str, segment: str | None = None) -> TransformError:
+    """Create a T012 Dangling Branch error (elif/else without a preceding if)."""
+    return TransformError(
+        code=TransformErrorCodes.T012_DANGLING_BRANCH,
+        message=f"'{directive}' segment has no preceding 'if'",
+        path=segment,
     )
 
 

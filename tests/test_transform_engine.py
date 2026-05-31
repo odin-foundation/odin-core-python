@@ -707,3 +707,119 @@ class TestEvaluateCondition:
 
     def test_at_prefixed_path(self):
         assert _evaluate_condition("@hasDui = true", self._source(), _ExecContext()) is True
+
+
+# ── Verb-Expression Conditions ─────────────────────────────────────────────────
+
+
+_VERB_COND_HEADER = (
+    '{$}\n'
+    'odin = "1.0.0"\n'
+    'transform = "1.0.0"\n'
+    'direction = "odin->json"\n'
+    'target.format = "json"\n\n'
+)
+
+
+class TestVerbConditions:
+    def test_truthy_reference_condition_included(self):
+        t = _VERB_COND_HEADER + '{Sec :if @flag}\nv = "yes"\n'
+        out = _output_dict(_execute(t, {"flag": True}))
+        assert out == {"Sec": {"v": "yes"}}
+
+    def test_truthy_reference_condition_omitted(self):
+        t = _VERB_COND_HEADER + '{Sec :if @flag}\nv = "yes"\n'
+        out = _output_dict(_execute(t, {"flag": False}))
+        assert out == {}
+
+    def test_eq_verb_condition_true(self):
+        t = _VERB_COND_HEADER + '{Sec :if %eq @tier "gold"}\nv = "yes"\n'
+        out = _output_dict(_execute(t, {"tier": "gold"}))
+        assert out == {"Sec": {"v": "yes"}}
+
+    def test_eq_verb_condition_false(self):
+        t = _VERB_COND_HEADER + '{Sec :if %eq @tier "gold"}\nv = "yes"\n'
+        out = _output_dict(_execute(t, {"tier": "silver"}))
+        assert out == {}
+
+    def test_lt_verb_condition_true(self):
+        t = _VERB_COND_HEADER + '{Sec :if %lt @age ##25}\nv = "young"\n'
+        out = _output_dict(_execute(t, {"age": 20}))
+        assert out == {"Sec": {"v": "young"}}
+
+    def test_and_verb_condition(self):
+        t = _VERB_COND_HEADER + '{Sec :if %and @a @b}\nv = "ok"\n'
+        assert _output_dict(_execute(t, {"a": True, "b": True})) == {"Sec": {"v": "ok"}}
+        assert _output_dict(_execute(t, {"a": True, "b": False})) == {}
+
+    def test_or_verb_condition(self):
+        t = _VERB_COND_HEADER + '{Sec :if %or @a @b}\nv = "ok"\n'
+        assert _output_dict(_execute(t, {"a": False, "b": True})) == {"Sec": {"v": "ok"}}
+        assert _output_dict(_execute(t, {"a": False, "b": False})) == {}
+
+    def test_not_verb_condition(self):
+        t = _VERB_COND_HEADER + '{Sec :if %not @flag}\nv = "ok"\n'
+        assert _output_dict(_execute(t, {"flag": False})) == {"Sec": {"v": "ok"}}
+        assert _output_dict(_execute(t, {"flag": True})) == {}
+
+    def test_legacy_quoted_infix_back_compat(self):
+        t = _VERB_COND_HEADER + '{Sec}\n_if = "@status = \'active\'"\nv = "yes"\n'
+        assert _output_dict(_execute(t, {"status": "active"})) == {"Sec": {"v": "yes"}}
+        assert _output_dict(_execute(t, {"status": "void"})) == {}
+
+
+# ── Conditional Chains (if/elif/else) ──────────────────────────────────────────
+
+
+_CHAIN = (
+    _VERB_COND_HEADER
+    + '{High :if %eq @tier "dui"}\nband = "high"\n'
+    + '{Young :elif %lt @age ##25}\nband = "young"\n'
+    + '{Standard :else}\nband = "standard"\n'
+)
+
+
+class TestConditionalChain:
+    def test_if_branch_taken(self):
+        out = _output_dict(_execute(_CHAIN, {"tier": "dui", "age": 30}))
+        assert out == {"High": {"band": "high"}}
+
+    def test_elif_fall_through(self):
+        out = _output_dict(_execute(_CHAIN, {"tier": "standard", "age": 20}))
+        assert out == {"Young": {"band": "young"}}
+
+    def test_else_fallback(self):
+        out = _output_dict(_execute(_CHAIN, {"tier": "standard", "age": 40}))
+        assert out == {"Standard": {"band": "standard"}}
+
+    def test_only_first_matching_branch_emitted(self):
+        # if true → elif/else skipped even though elif would also match
+        out = _output_dict(_execute(_CHAIN, {"tier": "dui", "age": 20}))
+        assert out == {"High": {"band": "high"}}
+
+    def test_chain_breaks_on_non_chain_segment(self):
+        t = (
+            _VERB_COND_HEADER
+            + '{A :if %eq @x "1"}\nv = "a"\n'
+            + '{Mid}\nv = "m"\n'
+            + '{B :else}\nv = "b"\n'
+        )
+        result = _execute(t, {"x": "9"})
+        # {B :else} has no preceding if (chain broke at {Mid}) → T012
+        assert not result.success
+        assert any(e.code == "T012" for e in result.errors)
+
+    def test_orphan_elif_raises_t012(self):
+        t = _VERB_COND_HEADER + '{Sec :elif %eq @x "1"}\nv = "a"\n'
+        result = _execute(t, {"x": "1"})
+        assert not result.success
+        codes = [e.code for e in result.errors]
+        assert "T012" in codes
+        msg = next(e.message for e in result.errors if e.code == "T012")
+        assert "'elif' segment has no preceding 'if'" == msg
+
+    def test_orphan_else_raises_t012(self):
+        t = _VERB_COND_HEADER + '{Sec :else}\nv = "a"\n'
+        result = _execute(t, {})
+        assert not result.success
+        assert any(e.code == "T012" for e in result.errors)

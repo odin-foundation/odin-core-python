@@ -575,12 +575,15 @@ def _build_segment(
                 pass
             continue
 
-        # Handle _if directive
-        if field == "_if":
-            if isinstance(value, OdinString):
-                seg.condition = value.value
-            elif isinstance(value, OdinReference):
-                seg.condition = value.path
+        # Handle _if / _elif directive (verb-expression or legacy infix condition)
+        if field in ("_if", "_elif"):
+            seg.branch = field[1:]
+            _set_segment_condition(seg, value)
+            continue
+
+        # Handle _else directive (bare flag, value ignored)
+        if field == "_else":
+            seg.branch = "else"
             continue
 
         # Handle _type (discriminator)
@@ -629,6 +632,29 @@ def _build_segment(
         return None
 
     return seg
+
+
+def _set_segment_condition(seg: TransformSegment, value: Any) -> None:
+    """Store a segment condition as a parsed verb expression or legacy infix string.
+
+    Verb conditions (`%verb …` or an OdinVerbExpression) are parsed into a
+    TransformExpression evaluated by the expression evaluator. A bare reference or
+    a non-`%` string is kept as a legacy infix condition string.
+    """
+    if isinstance(value, OdinVerbExpression):
+        seg.condition_expr = TransformExpression(call=_parse_verb_call(value))
+        return
+    if isinstance(value, OdinString):
+        raw = value.value.strip()
+        if raw.startswith("%"):
+            call = _parse_verb_from_string(raw)
+            if call is not None:
+                seg.condition_expr = TransformExpression(call=call)
+                return
+        seg.condition = value.value
+        return
+    if isinstance(value, OdinReference):
+        seg.condition = value.path
 
 
 def _build_mapping(

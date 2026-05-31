@@ -29,6 +29,7 @@ from odin.transform.types import (
     TransformWarning,
 )
 from odin.transform.verb_registry import VerbRegistry
+from odin.transform.errors import dangling_branch_error
 from odin.transform.verbs.collection_verbs import _check_filter_condition
 from odin.types.document import OdinModifiers
 from odin.types.values import (
@@ -115,21 +116,21 @@ class TransformEngine:
         ctx = self._build_context(transform, source)
         output = DynValue.of_object({})
 
-        segments = _order_segments_by_pass(transform.segments)
+        # Group segments by pass: ordered passes (1, 2, ...) then pass 0.
+        # The conditional chain controller runs within each pass group so chains
+        # break at pass boundaries.
+        pass_groups = _group_segments_by_pass(transform.segments)
 
-        current_pass = None
         is_first = True
-        for seg in segments:
-            seg_pass = seg.pass_num
-            if seg_pass != current_pass and not is_first:
+        for _pass_num, group in pass_groups:
+            if not is_first:
                 # Reset non-persist accumulators on pass change
                 for name, acc_def in transform.accumulators.items():
                     if not acc_def.persist:
                         ctx.accumulators[name] = _odin_value_to_dyn(acc_def.initial)
-            current_pass = seg_pass
             is_first = False
 
-            output = self._process_segment(seg, ctx, output, "")
+            output = self._process_segment_list(group, ctx, output, "")
             ctx.global_output = output
 
         # Consolidate indexed segments (e.g., vehicles[0], vehicles[1] → vehicles array)
@@ -277,6 +278,66 @@ class TransformEngine:
             output_modifiers=ctx.field_modifiers,
         )
 
+    def _evaluate_segment_condition(
+        self, segment: TransformSegment, ctx: _ExecContext
+    ) -> bool:
+        """Evaluate a segment condition: a verb expression, or a legacy infix string."""
+        if segment.condition_expr is not None:
+            return _is_truthy(
+                self._evaluate_expression(
+                    segment.condition_expr, ctx, ctx.source, ctx.global_output
+                )
+            )
+        if segment.condition is not None:
+            return _evaluate_condition(segment.condition, ctx.source, ctx)
+        return True
+
+    def _process_segment_list(
+        self,
+        segments: List[TransformSegment],
+        ctx: _ExecContext,
+        output: DynValue,
+        path_prefix: str,
+    ) -> DynValue:
+        """Process a list of segments, honoring if/elif/else conditional chains.
+
+        A chain is a run of consecutive segments: one `if`, then any `elif`, then an
+        optional `else`. Only the first branch whose condition holds is processed.
+        """
+        # 'none' = no active chain; 'pending' = chain open, none taken; 'taken' = a branch taken
+        branch = "none"
+
+        for segment in segments:
+            kind = segment.branch
+            if kind == "if":
+                taken = self._evaluate_segment_condition(segment, ctx)
+                branch = "taken" if taken else "pending"
+                if taken:
+                    output = self._process_segment(segment, ctx, output, path_prefix)
+            elif kind == "elif":
+                if branch == "none":
+                    ctx.errors.append(dangling_branch_error("elif", segment.name))
+                    continue
+                if branch == "taken":
+                    continue
+                taken = self._evaluate_segment_condition(segment, ctx)
+                branch = "taken" if taken else "pending"
+                if taken:
+                    output = self._process_segment(segment, ctx, output, path_prefix)
+            elif kind == "else":
+                if branch == "none":
+                    ctx.errors.append(dangling_branch_error("else", segment.name))
+                    continue
+                if branch == "pending":
+                    output = self._process_segment(segment, ctx, output, path_prefix)
+                branch = "none"
+            else:
+                branch = "none"
+                output = self._process_segment(segment, ctx, output, path_prefix)
+            ctx.global_output = output
+
+        return output
+
     def _process_segment(
         self,
         segment: TransformSegment,
@@ -284,11 +345,6 @@ class TransformEngine:
         output: DynValue,
         path_prefix: str,
     ) -> DynValue:
-        # Condition check
-        if segment.condition is not None:
-            if not _evaluate_condition(segment.condition, ctx.source, ctx):
-                return output
-
         # Discriminator check (only for import; export _type has empty path)
         if segment.segment_discriminator is not None:
             disc = segment.segment_discriminator
@@ -384,16 +440,16 @@ class TransformEngine:
         if is_root:
             for mapping in segment.mappings:
                 output = self._process_mapping(mapping, ctx, ctx.source, output, path_prefix)
-            for child in segment.children:
-                output = self._process_segment(child, ctx, output, path_prefix)
+            output = self._process_segment_list(segment.children, ctx, output, path_prefix)
         else:
             seg_output = _get_or_create_object(output, clean_name)
             for mapping in segment.mappings:
                 seg_output = self._process_mapping(
                     mapping, ctx, ctx.source, seg_output, current_prefix,
                 )
-            for child in segment.children:
-                seg_output = self._process_segment(child, ctx, seg_output, current_prefix)
+            seg_output = self._process_segment_list(
+                segment.children, ctx, seg_output, current_prefix
+            )
             _set_path(output, clean_name, seg_output)
 
         return output
@@ -1502,6 +1558,19 @@ def _normalize_timestamp(s: str) -> str:
 
 
 # ── Segment Ordering ──────────────────────────────────────────────────────────
+
+
+def _group_segments_by_pass(segments: List[TransformSegment]):
+    """Group segments into ordered pass groups: passes 1..N first, then pass 0.
+
+    Returns a list of (pass_num, segments) preserving original order within each pass.
+    """
+    pass_nums = sorted({seg.pass_num for seg in segments if seg.pass_num})
+    groups = []
+    for p in pass_nums:
+        groups.append((p, [s for s in segments if s.pass_num == p]))
+    groups.append((0, [s for s in segments if not s.pass_num]))
+    return groups
 
 
 def _order_segments_by_pass(segments: List[TransformSegment]) -> List[TransformSegment]:

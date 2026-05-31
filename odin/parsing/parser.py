@@ -294,6 +294,49 @@ class OdinParser:
             break
         return False
 
+    def _reconstruct_header_expr(
+        self, tokens: List[Token], pos: int, end: int
+    ) -> Tuple[str, int]:
+        """Reconstruct an inline header condition expression up to the closing brace.
+
+        Joins tokens so a verb expression like `%eq @driver.tier "dui"` or a bare
+        reference like `@driver.hasDui` round-trips through the verb-expression parser.
+        Returns (expression_text, position_after_expression).
+        """
+        out: List[str] = []
+        # Prefixes that attach to the following token without a separating space
+        glue_prev = {
+            TokenType.PREFIX_VERB, TokenType.PREFIX_REFERENCE, TokenType.PREFIX_NUMBER,
+            TokenType.PREFIX_INTEGER, TokenType.PREFIX_CURRENCY, TokenType.PREFIX_PERCENT,
+            TokenType.PREFIX_BOOLEAN, TokenType.PREFIX_BINARY, TokenType.PREFIX_EXTENSION,
+            TokenType.DOT,
+        }
+        prev_type: Optional[TokenType] = None
+        while pos < end and tokens[pos].type != TokenType.HEADER_CLOSE:
+            t = tokens[pos]
+            if t.type in (TokenType.NEWLINE, TokenType.EOF):
+                break
+            if t.type == TokenType.WHITESPACE:
+                pos += 1
+                continue
+            if t.type == TokenType.STRING_QUOTED:
+                piece = f'"{t.value}"'
+            else:
+                piece = t.value
+            no_space = (
+                not out
+                or prev_type in glue_prev
+                or t.type == TokenType.DOT
+            )
+            if no_space:
+                out.append(piece)
+            else:
+                out.append(" ")
+                out.append(piece)
+            prev_type = t.type
+            pos += 1
+        return "".join(out), pos
+
     def _parse_header(
         self,
         tokens: List[Token],
@@ -341,17 +384,36 @@ class OdinParser:
 
             # Detect `:` separator (comes as ERROR token)
             if t.type == TokenType.ERROR and t.value == ":":
-                # Inline directive {Section :type "value"} / {Section :if "expr"}:
-                # `:name "value"` where name is type or if and value is a quoted string
+                # Inline directive {Section :type "value"} keeps a quoted value
                 if (
                     pos + 2 < end
                     and tokens[pos + 1].type == TokenType.IDENTIFIER
-                    and tokens[pos + 1].value in ("type", "if")
+                    and tokens[pos + 1].value == "type"
                     and tokens[pos + 2].type == TokenType.STRING_QUOTED
                 ):
-                    directive_name = tokens[pos + 1].value
-                    self._pending_header_directive = (f"_{directive_name}", tokens[pos + 2].value)
+                    self._pending_header_directive = ("_type", tokens[pos + 2].value)
                     pos += 3
+                    continue
+                # {Section :if <expr>} / {Section :elif <expr>}: capture the
+                # unquoted expression up to the closing brace
+                if (
+                    pos + 1 < end
+                    and tokens[pos + 1].type == TokenType.IDENTIFIER
+                    and tokens[pos + 1].value in ("if", "elif")
+                ):
+                    directive_name = tokens[pos + 1].value
+                    expr_text, new_pos = self._reconstruct_header_expr(tokens, pos + 2, end)
+                    self._pending_header_directive = (f"_{directive_name}", expr_text)
+                    pos = new_pos
+                    continue
+                # {Section :else}: bare flag
+                if (
+                    pos + 1 < end
+                    and tokens[pos + 1].type == TokenType.IDENTIFIER
+                    and tokens[pos + 1].value == "else"
+                ):
+                    self._pending_header_directive = ("_else", "true")
+                    pos += 2
                     continue
                 # Tabular column separator
                 in_column_defs = True
