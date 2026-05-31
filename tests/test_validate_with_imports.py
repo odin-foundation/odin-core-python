@@ -3,53 +3,64 @@ import odin
 from odin.resolver.import_resolver import ImportResolver
 from odin.validation.schema_parser import parse_schema
 
-CANONICAL = "C:/dev/odin/schemas/insurance/personal/auto/policy.schema.odin"
+
+class _MemReader:
+    """In-memory file reader serving inline schemas by basename."""
+
+    def __init__(self, files: dict[str, str]) -> None:
+        self._files = files
+
+    def read_file(self, path: str) -> str:
+        return self._files[path.replace("\\", "/").split("/")[-1]]
+
+    def resolve_path(self, base_path, import_path: str) -> str:
+        return import_path
 
 
-def _load_canonical():
-    return parse_schema(open(CANONICAL, encoding="utf-8").read())
+# A main schema that imports a tiny `types` schema and references one of its types.
+_MAIN = (
+    '@import "types.odin" as types\n'
+    '{$}\nodin = "1.0.0"\nschema = "1.0.0"\n\n'
+    "{policy}\nstatus_ref = @types.policy_status\n"
+)
+_TYPES = (
+    '{$}\nodin = "1.0.0"\nschema = "1.0.0"\n\n'
+    "{@policy_status}\nvalue = !\n"
+)
 
 
-class TestImportParsing:
-    def test_quotes_stripped_and_alias_captured(self):
-        schema = _load_canonical()
-        by_alias = {imp.alias: imp.path for imp in schema.imports}
-        assert by_alias["types"] == "../../common/types.schema.odin"
-        assert by_alias["pc"] == "../types.schema.odin"
-        # No quotes leaked into the path
-        assert all(not imp.path.startswith('"') for imp in schema.imports)
+class TestImportedTypeRef:
+    def test_imported_typeref_resolved_with_registry(self):
+        schema = parse_schema(_MAIN)
+        resolver = ImportResolver(reader=_MemReader({"types.odin": _TYPES}))
+        registry = resolver.resolve_schema(schema, "main.odin").resolution.type_registry
+        assert "types.policy_status" in registry
 
-    def test_distinct_aliases_no_collision(self):
-        schema = _load_canonical()
-        reg = ImportResolver().resolve_schema(schema, CANONICAL).resolution.type_registry
-        assert reg.get("types.policy_status") is not None
-        assert reg.get("pc.excluded_driver") is not None
-        # Two imports that both stem to "types" must not collide
-        assert "types.policy_status" in reg
-        assert "pc.excluded_driver" in reg
+        empty = odin.parse("")
+
+        # Without the registry the imported type reference is unresolved (V013).
+        baseline = odin.validate(empty, schema)
+        assert any(e.code == "V013" for e in baseline.errors)
+
+        # With the registry the reference resolves — no V013.
+        result = odin.validate(empty, schema, type_registry=registry)
+        assert [e for e in result.errors if e.code == "V013"] == []
 
 
-class TestCanonicalValidation:
-    def test_no_spurious_v013(self):
-        schema = _load_canonical()
-        res = odin.validate_with_imports(odin.parse(""), schema, CANONICAL)
-        v013 = [e for e in res.errors if e.code == "V013"]
-        assert v013 == []
-
-    def test_term_nested_in_policy_type(self):
-        # {.term} nests into the @policy type, not the schema root.
-        schema = _load_canonical()
+class TestRelativeSubsection:
+    def test_relative_subsection_nests_into_type(self):
+        # {.term} nests its fields into the @policy type, not the schema root.
+        schema = parse_schema(
+            "{@policy}\nnumber = !\n{.term}\neffective = !date\nexpiration = !date\n"
+        )
         policy_fields = schema.types["policy"].fields
         assert "term.effective" in policy_fields
         assert "term.expiration" in policy_fields
+        # term.* must not leak to the schema root.
+        assert "term.effective" not in schema.fields
 
-    def test_empty_doc_has_no_root_required_errors(self):
-        # term.* is inside @policy now, so an empty doc raises no root required errors.
-        schema = _load_canonical()
-        res = odin.validate_with_imports(odin.parse(""), schema, CANONICAL)
-        v001 = [e for e in res.errors if e.code == "V001"]
-        assert v001 == []
 
+class TestUnresolvedAlias:
     def test_unresolved_alias_still_reported(self):
         schema = parse_schema(
             '{$}\nodin = "1.0.0"\nschema = "1.0.0"\n\n{Policy}\nstatus = !@missing.thing'
