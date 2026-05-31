@@ -19,9 +19,10 @@ def _load_tests_from_file(filename):
 
 
 def _load_all_canonical_tests():
-    """Load all canonical text tests (all-types.json, normalization.json, tabular-expansion.json)."""
+    """Load all canonical text tests."""
     tests = []
-    for filename in ['all-types.json', 'normalization.json', 'tabular-expansion.json']:
+    for filename in ['all-types.json', 'normalization.json', 'tabular-expansion.json',
+                     'precision-and-modifiers.json']:
         for tc in _load_tests_from_file(filename):
             if 'expected' in tc and isinstance(tc['expected'], str):
                 tests.append(pytest.param(tc, id=tc['id']))

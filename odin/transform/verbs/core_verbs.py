@@ -6,6 +6,22 @@ from typing import List
 
 from odin.transform.dyn_value import DynValue, DynType
 from odin.transform.verbs.helpers import coerce_str, is_truthy
+from odin.transform.errors import (
+    lookup_key_not_found_error, lookup_key_not_found_warning,
+)
+
+
+def _report_lookup_miss(ctx: object, table_name: str, key: str) -> None:
+    """Report a lookup miss honoring the onMissing policy (default: silent null)."""
+    policy = getattr(ctx, "on_missing", None)
+    if policy == "fail":
+        errors = getattr(ctx, "errors", None)
+        if errors is not None:
+            errors.append(lookup_key_not_found_error(table_name, key))
+    elif policy == "warn":
+        warnings = getattr(ctx, "warnings", None)
+        if warnings is not None:
+            warnings.append(lookup_key_not_found_warning(table_name, key))
 
 
 def verb_concat(args: List[DynValue], ctx: object) -> DynValue:
@@ -141,10 +157,13 @@ def _do_lookup(args: List[DynValue], ctx: object, default: DynValue | None) -> D
 
     table_name, col_name = table_ref.split(".", 1)
     keys = args[1:]
+    match_key = ", ".join(coerce_str(k) for k in keys)
 
     tables = getattr(ctx, "tables", {})
     table = tables.get(table_name)
     if table is None:
+        if default is None:
+            _report_lookup_miss(ctx, table_name, match_key)
         return default if default is not None else DynValue.of_null()
 
     columns = getattr(table, "columns", [])
@@ -157,6 +176,8 @@ def _do_lookup(args: List[DynValue], ctx: object, default: DynValue | None) -> D
             return_idx = i
             break
     if return_idx < 0:
+        if default is None:
+            _report_lookup_miss(ctx, table_name, match_key)
         return default if default is not None else DynValue.of_null()
 
     # Check for reverse lookup: 2 extra args where first arg names a column
@@ -176,6 +197,8 @@ def _do_lookup(args: List[DynValue], ctx: object, default: DynValue | None) -> D
                 row_str = _row_val_to_str(row[search_col_idx])
                 if row_str == search_val:
                     return _row_val_to_dyn(row[return_idx])
+            if default is None:
+                _report_lookup_miss(ctx, table_name, match_key)
             return default if default is not None else DynValue.of_null()
 
     # Key-based lookup: key columns = all columns except the return column
@@ -197,4 +220,6 @@ def _do_lookup(args: List[DynValue], ctx: object, default: DynValue | None) -> D
         if match:
             return _row_val_to_dyn(row[return_idx])
 
+    if default is None:
+        _report_lookup_miss(ctx, table_name, match_key)
     return default if default is not None else DynValue.of_null()

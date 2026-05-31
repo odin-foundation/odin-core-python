@@ -230,17 +230,16 @@ def _format_canonical_value(value: OdinValue) -> str:
         return f'"{escape_odin_string(value.value, canonical=True)}"'
 
     if isinstance(value, OdinNumber):
-        return f'#{_format_canonical_number(value.value)}'
+        # Prefer raw to preserve precision beyond float range
+        src = value.raw if value.raw is not None else value.value
+        return f'#{_format_canonical_number(src)}'
 
     if isinstance(value, OdinInteger):
-        return f'##{value.value}'
+        # Prefer raw to preserve integers beyond float range
+        return f'##{value.raw if value.raw is not None else value.value}'
 
     if isinstance(value, OdinCurrency):
-        dp = max(value.decimal_places, 2)
-        # Format with exact decimal places
-        fmt = f'{{:.{dp}f}}'
-        num_str = fmt.format(float(value.value))
-        result = f'#${num_str}'
+        result = f'#${_format_canonical_currency(value)}'
         if value.currency_code:
             result += f':{value.currency_code.upper()}'
         return result
@@ -280,18 +279,36 @@ def _format_canonical_value(value: OdinValue) -> str:
     return ''
 
 
-def _format_canonical_number(value: float) -> str:
-    """Format number stripping trailing zeros."""
-    if not isinstance(value, (int, float)) or not (value == value):  # NaN check
-        raise ValueError('Non-finite numbers cannot be canonicalized')
-
-    s = str(value)
+def _format_canonical_number(value) -> str:
+    """Format number stripping trailing zeros. Accepts a raw string or a float."""
+    if isinstance(value, str):
+        s = value
+    else:
+        if not isinstance(value, (int, float)) or not (value == value):  # NaN check
+            raise ValueError('Non-finite numbers cannot be canonicalized')
+        s = str(value)
 
     # Strip trailing zeros from decimal part (but not from scientific notation)
     if '.' in s and 'e' not in s and 'E' not in s:
         s = s.rstrip('0').rstrip('.')
 
     return s
+
+
+def _format_canonical_currency(value: OdinCurrency) -> str:
+    """Format currency with at least 2 decimal places, preferring raw for precision."""
+    if value.raw is not None:
+        raw = value.raw
+        negative = raw.startswith('-')
+        unsigned = raw[1:] if negative else raw
+        dot = unsigned.find('.')
+        int_part = unsigned if dot < 0 else unsigned[:dot]
+        frac_part = '' if dot < 0 else unsigned[dot + 1:]
+        padded_frac = frac_part.ljust(2, '0') if len(frac_part) < 2 else frac_part
+        return f'{"-" if negative else ""}{int_part}.{padded_frac}'
+    dp = max(value.decimal_places, 2)
+    fmt = f'{{:.{dp}f}}'
+    return fmt.format(float(value.value))
 
 
 def _format_canonical_verb(value: OdinVerbExpression) -> str:

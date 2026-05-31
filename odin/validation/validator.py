@@ -99,6 +99,10 @@ def validate(
     for field_path, schema_field in expanded_fields.items():
         value = doc.get(field_path)
 
+        # Computed fields are produced downstream, not supplied as input.
+        if value is None and schema_field.computed:
+            continue
+
         # V010 / V001: Conditional requirements
         if schema_field.conditionals:
             cond_required = _evaluate_conditionals(
@@ -151,9 +155,42 @@ def validate(
                 return ValidationResult(valid=False, errors=errors, warnings=warnings)
             continue
 
+        # V003: Decimal places mismatch (#.N enforces exactly N places)
+        if isinstance(schema_field.field_type, DecimalType) and isinstance(value, OdinNumber):
+            raw = value.raw if value.raw is not None else str(value.value)
+            dot = raw.find(".")
+            actual_places = 0 if dot < 0 else len(raw) - dot - 1
+            if actual_places != schema_field.field_type.places:
+                if _add_error(ValidationError(
+                    path=field_path,
+                    code="V003",
+                    message=f"Decimal places mismatch at {field_path}: expected exactly {schema_field.field_type.places}",
+                    expected=schema_field.field_type.places,
+                    actual=actual_places,
+                )):
+                    return ValidationResult(valid=False, errors=errors, warnings=warnings)
+
         # V003: Value out of bounds
         for constraint in schema_field.constraints:
             if isinstance(constraint, BoundsConstraint):
+                # Binary bounds validate byte length, not string length.
+                if isinstance(value, OdinBinary):
+                    size = len(value.data)
+                    ok = True
+                    if constraint.min is not None and size < int(constraint.min):
+                        ok = False
+                    if constraint.max is not None and size > int(constraint.max):
+                        ok = False
+                    if not ok:
+                        if _add_error(ValidationError(
+                            path=field_path,
+                            code="V003",
+                            message=f"Binary size out of bounds at {field_path}",
+                            expected=f"min={constraint.min}, max={constraint.max}",
+                            actual=size,
+                        )):
+                            return ValidationResult(valid=False, errors=errors, warnings=warnings)
+                    continue
                 raw = _extract_raw_value(value)
                 if not check_bounds(raw, constraint):
                     if _add_error(ValidationError(

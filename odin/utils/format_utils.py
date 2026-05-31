@@ -43,20 +43,20 @@ def escape_odin_string(value: str, canonical: bool = False) -> str:
     return value
 
 
-# Pre-computed modifier prefix lookup (index = required*4 + confidential*2 + deprecated)
-_MODIFIER_PREFIXES = ['', '-', '*', '*-', '!', '!-', '!*', '!*-']
+# Pre-computed modifier prefix lookup (index = required*4 + deprecated*2 + confidential)
+_MODIFIER_PREFIXES = ['', '*', '-', '-*', '!', '!*', '!-', '!-*']
 
 
 def format_modifier_prefix(modifiers: Optional[OdinModifiers]) -> str:
-    """Format modifier prefix string: !, *, - in correct order."""
+    """Format modifier prefix string in canonical order: ! (required), - (deprecated), * (confidential)."""
     if modifiers is None:
         return ''
     idx = 0
     if modifiers.required:
         idx |= 4
-    if modifiers.confidential:
-        idx |= 2
     if modifiers.deprecated:
+        idx |= 2
+    if modifiers.confidential:
         idx |= 1
     return _MODIFIER_PREFIXES[idx]
 

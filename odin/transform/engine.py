@@ -57,7 +57,7 @@ class VerbContext:
 
     __slots__ = (
         "source", "loop_vars", "accumulators", "tables",
-        "constants", "global_output",
+        "constants", "global_output", "on_missing", "errors", "warnings",
     )
 
     def __init__(self) -> None:
@@ -67,6 +67,9 @@ class VerbContext:
         self.tables: Dict[str, Any] = {}
         self.constants: Dict[str, DynValue] = {}
         self.global_output: DynValue = DynValue.of_null()
+        self.on_missing: Optional[str] = None
+        self.errors: List[TransformError] = []
+        self.warnings: List[TransformWarning] = []
 
 
 class _ExecContext:
@@ -77,7 +80,7 @@ class _ExecContext:
         "loop_vars", "warnings", "errors",
         "enforce_confidential", "global_output", "field_modifiers",
         "source_format", "verb_registry", "loop_depth",
-        "on_validation",
+        "on_validation", "on_error", "on_missing",
     )
 
     def __init__(self) -> None:
@@ -95,6 +98,8 @@ class _ExecContext:
         self.verb_registry: Optional[VerbRegistry] = None
         self.loop_depth: int = 0
         self.on_validation: str = "fail"
+        self.on_error: str = "fail"
+        self.on_missing: Optional[str] = None
 
 
 class TransformEngine:
@@ -180,6 +185,8 @@ class TransformEngine:
         ctx.enforce_confidential = transform.enforce_confidential
         ctx.source_format = (transform.source.format if transform.source else "")
         ctx.on_validation = transform.target.options.get("onValidation", "fail")
+        ctx.on_error = transform.target.options.get("onError", "fail")
+        ctx.on_missing = transform.target.options.get("onMissing")
 
         # Init constants
         for name, value in transform.constants.items():
@@ -234,6 +241,16 @@ class TransformEngine:
             # Find matching segment
             seg = segment_map.get(disc_value)
             if seg is None:
+                if ctx.on_error == "fail":
+                    ctx.errors.append(TransformError(
+                        message=f"Unknown record type '{disc_value}' at record {record_index + 1}",
+                        path="",
+                    ))
+                elif ctx.on_error == "warn":
+                    ctx.warnings.append(TransformWarning(
+                        message=f"Unknown record type '{disc_value}' at record {record_index + 1}",
+                        path="",
+                    ))
                 continue
 
             # Parse record into source object
@@ -250,6 +267,9 @@ class TransformEngine:
             record_ctx.tables = ctx.tables
             record_ctx.global_output = output
             record_ctx.field_modifiers = ctx.field_modifiers
+            record_ctx.on_validation = ctx.on_validation
+            record_ctx.on_error = ctx.on_error
+            record_ctx.on_missing = ctx.on_missing
 
             # Process segment mappings
             record_output = DynValue.of_object({})
@@ -261,7 +281,9 @@ class TransformEngine:
                     mapping, record_ctx, record_source, record_output, ""
                 )
 
-            # Merge modifiers from record context
+            # Merge errors/warnings and modifiers from record context
+            ctx.errors.extend(record_ctx.errors)
+            ctx.warnings.extend(record_ctx.warnings)
             ctx.field_modifiers.update(record_ctx.field_modifiers)
 
             # Merge into output
@@ -555,10 +577,13 @@ class TransformEngine:
                     ctx.field_modifiers[full_key] = mapping.modifiers
 
         except Exception as e:
-            ctx.errors.append(TransformError(
-                message=str(e),
-                path=mapping.target,
-            ))
+            message = str(e)
+            if ctx.on_error == "warn":
+                ctx.warnings.append(TransformWarning(message=message, path=mapping.target))
+            elif ctx.on_error == "skip":
+                pass
+            else:
+                ctx.errors.append(TransformError(message=message, path=mapping.target))
 
         return output
 
@@ -809,6 +834,11 @@ class TransformEngine:
         verb_ctx.tables = ctx.tables
         verb_ctx.constants = ctx.constants
         verb_ctx.global_output = ctx.global_output
+        verb_ctx.on_missing = ctx.on_missing
+        # Share the execution context's error/warning lists so verb-reported
+        # misses surface in the result.
+        verb_ctx.errors = ctx.errors
+        verb_ctx.warnings = ctx.warnings
         return verb_ctx
 
     def _execute_lazy_verb(

@@ -368,7 +368,7 @@ def _parse_currency_value(tokens: List[Token], pos: int) -> Tuple[OdinCurrency, 
         value=value,
         currency_code=currency_code,
         decimal_places=decimal_places,
-        raw=raw,
+        raw=num_part,
     ), consumed
 
 

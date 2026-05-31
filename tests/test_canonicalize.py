@@ -199,11 +199,11 @@ class TestCanonicalModifiers:
         assert odin.canonicalize(b.build()) == b'oldField = -"legacy"\n'
 
     def test_combined_order(self):
-        """Combined modifiers in canonical order: !*-"""
+        """Combined modifiers in canonical order: !-* (required, deprecated, confidential)"""
         b = OdinDocumentBuilder()
         b.set("important", OdinString("secret"),
               OdinModifiers(required=True, confidential=True, deprecated=True))
-        assert odin.canonicalize(b.build()) == b'important = !*-"secret"\n'
+        assert odin.canonicalize(b.build()) == b'important = !-*"secret"\n'
 
 
 # ─── Normalization ───

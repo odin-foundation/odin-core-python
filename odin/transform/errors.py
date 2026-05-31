@@ -6,7 +6,7 @@ These codes are consistent across all ODIN implementations.
 
 from __future__ import annotations
 
-from odin.transform.types import TransformError
+from odin.transform.types import TransformError, TransformWarning
 
 
 # ── Error Code Constants ──────────────────────────────────────────────────────
@@ -105,6 +105,16 @@ def lookup_key_not_found_error(
     """Create a T004 Lookup Key Not Found error."""
     return TransformError(
         code=TransformErrorCodes.T004_LOOKUP_KEY_NOT_FOUND,
+        message=f"Lookup key '{key}' not found in table '{table_name}'",
+        path=field,
+    )
+
+
+def lookup_key_not_found_warning(
+    table_name: str, key: str, field: str | None = None
+) -> TransformWarning:
+    """Create a T004 Lookup Key Not Found warning (for warn mode)."""
+    return TransformWarning(
         message=f"Lookup key '{key}' not found in table '{table_name}'",
         path=field,
     )

@@ -167,7 +167,7 @@ class TestModifierFormatting:
     def test_combined_all(self):
         b = OdinDocumentBuilder()
         b.set("x", OdinString("val"), OdinModifiers(required=True, confidential=True, deprecated=True))
-        assert odin.dumps(b.build()) == 'x = !*-"val"\n'
+        assert odin.dumps(b.build()) == 'x = !-*"val"\n'
 
     def test_no_modifiers(self):
         b = OdinDocumentBuilder()
