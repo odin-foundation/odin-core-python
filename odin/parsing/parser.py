@@ -58,12 +58,36 @@ class OdinParser:
         tokens = Tokenizer(text).tokenize()
         return self._build_documents(tokens, options)
 
-    def _build_documents(self, tokens: List[Token], options: ParseOptions) -> OdinDocument:
-        """Build document(s) from token stream. Returns the first/primary document."""
-        documents: List[OdinDocument] = []
-        start = 0
+    def parse_documents(
+        self, text: str, options: Optional[ParseOptions] = None
+    ) -> List[OdinDocument]:
+        """Parse a chained ODIN document into the full list of documents.
 
-        # Find document separators
+        A single document yields a one-element list.
+        """
+        if options is None:
+            options = ParseOptions()
+
+        if text and text[0] == "﻿":
+            text = text[1:]
+
+        if len(text) > options.max_document_size:
+            raise ParseError(
+                "Maximum document size exceeded",
+                ParseErrorCodes.P011,
+                1,
+                1,
+            )
+
+        tokens = Tokenizer(text).tokenize()
+        return self._build_all_documents(tokens, options)
+
+    def _build_all_documents(
+        self, tokens: List[Token], options: ParseOptions
+    ) -> List[OdinDocument]:
+        """Build every document in a `---` chain from the token stream."""
+        documents: List[OdinDocument] = []
+
         doc_starts: List[int] = [0]
         for i, t in enumerate(tokens):
             if t.type == TokenType.DOC_SEPARATOR:
@@ -71,12 +95,16 @@ class OdinParser:
 
         for seg_idx, seg_start in enumerate(doc_starts):
             seg_end = doc_starts[seg_idx + 1] - 1 if seg_idx + 1 < len(doc_starts) else len(tokens)
-            doc = self._build_single_document(tokens, seg_start, seg_end, options)
-            documents.append(doc)
+            documents.append(self._build_single_document(tokens, seg_start, seg_end, options))
 
-        if len(documents) == 0:
-            return OdinDocumentBuilder().build()
+        if not documents:
+            return [OdinDocumentBuilder().build()]
 
+        return documents
+
+    def _build_documents(self, tokens: List[Token], options: ParseOptions) -> OdinDocument:
+        """Build document(s) from token stream. Returns the first/primary document."""
+        documents = self._build_all_documents(tokens, options)
         return documents[0]
 
     def _build_single_document(
@@ -661,8 +689,20 @@ class OdinParser:
 
         path_value = "".join(path_parts)
 
-        # Resolve full path with header context
-        full_path = self._resolve_path(path_value, current_header)
+        # Top-level metadata assignment ($.path), e.g. canonicalized output
+        is_meta_path = current_header is None and (
+            path_value == "$" or path_value.startswith("$.")
+        )
+        if is_meta_path:
+            meta_key = path_value[2:] if path_value.startswith("$.") else ""
+            if meta_key:
+                in_metadata = True
+                current_header = None
+                full_path = meta_key
+            else:
+                full_path = self._resolve_path(path_value, current_header)
+        else:
+            full_path = self._resolve_path(path_value, current_header)
 
         # Depth validation (P010)
         depth = self._count_depth(full_path)

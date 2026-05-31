@@ -157,25 +157,31 @@ def test_golden_parse(test_case):
 
     # Multi-document tests use "documents" key
     if "documents" in expected:
-        # For now, parse and validate the first document
-        doc = odin.parse(input_text)
+        docs = odin.parse_documents(input_text)
+        exp_docs = expected["documents"]
+        assert len(docs) == len(exp_docs), \
+            f"Document count mismatch: {len(docs)} != {len(exp_docs)}"
 
-        first_doc_exp = expected["documents"][0]
-        if "metadata" in first_doc_exp:
-            for key, exp_val in first_doc_exp["metadata"].items():
-                actual = doc.metadata.get(key)
-                if actual is None:
-                    actual = doc.get(f"$.{key}")
-                assert actual is not None, f"Missing metadata key: {key}"
-                if isinstance(exp_val, str):
-                    assert isinstance(actual, OdinString), f"Expected string for metadata {key}"
-                    assert actual.value == exp_val
+        for i, doc_exp in enumerate(exp_docs):
+            doc = docs[i]
+            if "metadata" in doc_exp:
+                for key, exp_val in doc_exp["metadata"].items():
+                    actual = doc.metadata.get(key)
+                    if actual is None:
+                        actual = doc.get(f"$.{key}")
+                    assert actual is not None, f"Missing metadata key: {key} (document {i})"
+                    # Metadata values in fixtures are raw primitives; compare against
+                    # the source/raw form (dates by raw YYYY-MM-DD).
+                    actual_raw = getattr(actual, "raw", None)
+                    actual_val = actual_raw if actual_raw is not None else getattr(actual, "value", None)
+                    assert str(actual_val) == str(exp_val), \
+                        f"Metadata mismatch at {key} (document {i}): {actual_val!r} != {exp_val!r}"
 
-        if "assignments" in first_doc_exp:
-            for path, exp_val in first_doc_exp["assignments"].items():
-                actual = doc.get(path)
-                assert actual is not None, f"Missing path: {path}"
-                assert_value_matches(actual, exp_val, path)
+            if "assignments" in doc_exp:
+                for path, exp_val in doc_exp["assignments"].items():
+                    actual = doc.get(path)
+                    assert actual is not None, f"Missing path: {path} (document {i})"
+                    assert_value_matches(actual, exp_val, path)
         return
 
     # Single document

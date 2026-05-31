@@ -297,8 +297,24 @@ def _parse_integer_value(tokens: List[Token], pos: int) -> Tuple[OdinInteger, in
     try:
         value = int(raw)
     except ValueError:
-        # Very large integer - store 0 but preserve raw
-        value = 0
+        # Not a plain integer literal; allow only integral floats (e.g. 1e3)
+        try:
+            fval = float(raw)
+        except ValueError:
+            raise ParseError(
+                "Invalid integer format",
+                ParseErrorCodes.P006,
+                tokens[pos].line,
+                tokens[pos].column,
+            )
+        if fval != int(fval):
+            raise ParseError(
+                f"Integer (##) value cannot have a fractional part: {raw}",
+                ParseErrorCodes.P006,
+                tokens[pos].line,
+                tokens[pos].column,
+            )
+        value = int(fval)
     return OdinInteger(value=value, raw=raw), consumed
 
 

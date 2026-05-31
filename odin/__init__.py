@@ -60,6 +60,7 @@ __version__ = "1.0.5"
 __all__ = [
     # Main functions
     "parse",
+    "parse_documents",
     "loads",
     "dump",
     "dumps",
@@ -161,6 +162,34 @@ def parse(
     if isinstance(text, bytes):
         text = text.decode("utf-8")
     return OdinParser().parse(text, options)
+
+
+def parse_documents(
+    text: Union[str, bytes],
+    options: Optional[ParseOptions] = None,
+) -> "list[OdinDocument]":
+    """
+    Parse a chained ODIN document (one or more documents separated by ``---``)
+    into the full list of documents.
+
+    A single document yields a one-element list.
+
+    Args:
+        text: ODIN text as string or UTF-8 bytes
+        options: Parse options
+
+    Returns:
+        List of parsed documents in chain order
+
+    Example:
+        >>> docs = odin.parse_documents('{$}\\nid = "a"\\n\\n---\\n\\n{$}\\nid = "b"')
+        >>> len(docs)
+        2
+    """
+    from odin.parsing.parser import OdinParser
+    if isinstance(text, bytes):
+        text = text.decode("utf-8")
+    return OdinParser().parse_documents(text, options)
 
 
 def loads(
