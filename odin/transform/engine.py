@@ -1103,8 +1103,71 @@ def _split_condition(expr: str) -> Optional[tuple]:
     return None
 
 
+def _split_top_level(expr: str, op: str) -> List[str]:
+    """Split on whole-word `op` at top level, respecting quoted segments."""
+    op_len = len(op)
+    segments: List[str] = []
+    start = 0
+    i = 0
+    quote: Optional[str] = None
+    while i < len(expr):
+        ch = expr[i]
+        if quote is not None:
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if (
+            expr[i : i + op_len].lower() == op
+            and i > start
+            and expr[i - 1].isspace()
+            and i + op_len < len(expr)
+            and expr[i + op_len].isspace()
+        ):
+            segments.append(expr[start:i])
+            start = i + op_len
+            i = start
+            continue
+        i += 1
+    segments.append(expr[start:])
+    return [s.strip() for s in segments if s.strip() != ""]
+
+
 def _evaluate_condition(condition: str, source: DynValue, ctx: "_ExecContext") -> bool:
-    """Evaluate an _if condition: truthy path check or `path <op> value` comparison."""
+    """Evaluate an _if condition with flat or/and/not boolean operators."""
+    return _evaluate_or(condition.strip(), source, ctx)
+
+
+def _evaluate_or(expr: str, source: DynValue, ctx: "_ExecContext") -> bool:
+    """OR layer: lowest precedence."""
+    terms = _split_top_level(expr, "or")
+    if len(terms) > 1:
+        return any(_evaluate_and(t, source, ctx) for t in terms)
+    return _evaluate_and(expr, source, ctx)
+
+
+def _evaluate_and(expr: str, source: DynValue, ctx: "_ExecContext") -> bool:
+    """AND layer: binds tighter than or."""
+    factors = _split_top_level(expr, "and")
+    if len(factors) > 1:
+        return all(_evaluate_not(f, source, ctx) for f in factors)
+    return _evaluate_not(expr, source, ctx)
+
+
+def _evaluate_not(expr: str, source: DynValue, ctx: "_ExecContext") -> bool:
+    """NOT layer: tightest precedence."""
+    trimmed = expr.strip()
+    if len(trimmed) >= 4 and trimmed[:3].lower() == "not" and trimmed[3].isspace():
+        return not _evaluate_not(trimmed[4:], source, ctx)
+    return _evaluate_primary(trimmed, source, ctx)
+
+
+def _evaluate_primary(condition: str, source: DynValue, ctx: "_ExecContext") -> bool:
+    """Evaluate a single condition: truthy path check or `path <op> value` comparison."""
     expr = condition.strip()
     parsed = _split_condition(expr)
     if parsed is not None:

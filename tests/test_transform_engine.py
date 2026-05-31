@@ -707,3 +707,40 @@ class TestEvaluateCondition:
 
     def test_at_prefixed_path(self):
         assert _evaluate_condition("@hasDui = true", self._source(), _ExecContext()) is True
+
+    def test_and_true(self):
+        assert _evaluate_condition("hasDui and age > 18", self._source(), _ExecContext()) is True
+
+    def test_and_false(self):
+        assert _evaluate_condition("hasDui and active", self._source(), _ExecContext()) is False
+
+    def test_or_true(self):
+        assert _evaluate_condition("active or hasDui", self._source(), _ExecContext()) is True
+
+    def test_or_false(self):
+        assert _evaluate_condition("active or age < 18", self._source(), _ExecContext()) is False
+
+    def test_not_truthy(self):
+        assert _evaluate_condition("not active", self._source(), _ExecContext()) is True
+
+    def test_not_comparison(self):
+        assert _evaluate_condition('not status = "void"', self._source(), _ExecContext()) is True
+
+    def test_not_binds_tighter_than_and(self):
+        # `not active and hasDui` -> (not active) and hasDui -> true and true
+        assert _evaluate_condition("not active and hasDui", self._source(), _ExecContext()) is True
+
+    def test_and_binds_tighter_than_or(self):
+        # `active and hasDui or hasDui` -> (active and hasDui) or hasDui -> false or true
+        assert _evaluate_condition(
+            "active and hasDui or hasDui", self._source(), _ExecContext()
+        ) is True
+
+    def test_operator_word_inside_quotes_not_split(self):
+        src = DynValue.of_object({"label": DynValue.of_string("cats and dogs")})
+        assert _evaluate_condition('label = "cats and dogs"', src, _ExecContext()) is True
+
+    def test_case_insensitive_operators(self):
+        assert _evaluate_condition("active OR hasDui", self._source(), _ExecContext()) is True
+        assert _evaluate_condition("hasDui AND age > 18", self._source(), _ExecContext()) is True
+        assert _evaluate_condition("NOT active", self._source(), _ExecContext()) is True
