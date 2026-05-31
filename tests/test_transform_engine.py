@@ -823,3 +823,35 @@ class TestConditionalChain:
         result = _execute(t, {})
         assert not result.success
         assert any(e.code == "T012" for e in result.errors)
+
+
+_INTERP_HEADER = (
+    '{$}\nodin = "1.0.0"\ntransform = "1.0.0"\ndirection = "json->json"\n'
+)
+
+
+class TestStringInterpolation:
+    def test_simple_path_interpolation(self):
+        t = _INTERP_HEADER + '{R}\ngreeting = "Hello, ${@.name}!"\n'
+        out = _output_dict(_execute(t, {"name": "Alice"}))
+        assert out["R"]["greeting"] == "Hello, Alice!"
+
+    def test_multiple_interpolations(self):
+        t = _INTERP_HEADER + '{R}\nfull = "${@.first} ${@.last}"\n'
+        out = _output_dict(_execute(t, {"first": "John", "last": "Doe"}))
+        assert out["R"]["full"] == "John Doe"
+
+    def test_verb_interpolation(self):
+        t = _INTERP_HEADER + '{R}\nv = "${%upper @.name}"\n'
+        out = _output_dict(_execute(t, {"name": "alice"}))
+        assert out["R"]["v"] == "ALICE"
+
+    def test_escaped_dollar_is_literal(self):
+        t = _INTERP_HEADER + '{R}\nv = "Total: \\$${@.amount}"\n'
+        out = _output_dict(_execute(t, {"amount": "42.00"}))
+        assert out["R"]["v"] == "Total: $42.00"
+
+    def test_escaped_marker_preserved(self):
+        t = _INTERP_HEADER + '{R}\nv = "Use \\${@.field} for the value"\n'
+        out = _output_dict(_execute(t, {"field": "X"}))
+        assert out["R"]["v"] == "Use ${@.field} for the value"

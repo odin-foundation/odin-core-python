@@ -313,6 +313,13 @@ class Tokenizer:
                 mapped = _ESCAPE_MAP.get(esc)
                 if mapped is not None:
                     parts.append(mapped)
+                elif esc == '$':
+                    # Literal dollar; keep the backslash before `${` so the
+                    # interpolation layer recognizes the escaped marker.
+                    if pos < text_len and text[pos] == '{':
+                        parts.append('\\$')
+                    else:
+                        parts.append('$')
                 elif esc == 'u':
                     # \uXXXX
                     if pos + 4 <= text_len:
@@ -391,6 +398,13 @@ class Tokenizer:
                 mapped = _ESCAPE_MAP.get(esc)
                 if mapped is not None:
                     parts.append(mapped)
+                elif esc == '$':
+                    # Literal dollar; keep the backslash before `${` so the
+                    # interpolation layer recognizes the escaped marker.
+                    if pos < text_len and text[pos] == '{':
+                        parts.append('\\$')
+                    else:
+                        parts.append('$')
                 elif esc == 'u' and pos + 4 <= text_len:
                     try:
                         parts.append(chr(int(text[pos:pos + 4], 16)))

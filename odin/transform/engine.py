@@ -42,6 +42,12 @@ from odin.types.values import (
 
 MAX_LOOP_NESTING = 10
 
+# Cap on interpolations per template to bound resource use
+MAX_INTERPOLATIONS = 320
+
+# Matches ${...} with an optional leading backslash for escaped markers
+_INTERP_RE = _re.compile(r"\\?\$\{([^}]+)\}")
+
 # Verbs that require lazy evaluation of their branch arguments
 _LAZY_EVAL_VERBS = frozenset({"ifElse", "ternary", "switch"})
 
@@ -570,7 +576,12 @@ class TransformEngine:
             return self._evaluate_copy(expr, ctx, current_source, current_output)
 
         if isinstance(expr, LiteralExpression):
-            return _odin_value_to_dyn(expr.value)
+            value = expr.value
+            if isinstance(value, OdinString) and "${" in value.value:
+                return self._interpolate_string(
+                    value.value, ctx, current_source, current_output,
+                )
+            return _odin_value_to_dyn(value)
 
         if isinstance(expr, TransformExpression):
             return self._execute_verb_call(expr.call, ctx, current_source, current_output)
@@ -585,6 +596,47 @@ class TransformEngine:
             return DynValue.of_object(obj)
 
         return DynValue.of_null()
+
+    def _interpolate_string(
+        self,
+        template: str,
+        ctx: _ExecContext,
+        current_source: DynValue,
+        current_output: DynValue,
+    ) -> DynValue:
+        """Interpolate ${...} expressions within a string template.
+
+        Supports ${@path}, ${@.path}, ${%verb args} and \\${...} escapes.
+        """
+        count = 0
+        max_interp = MAX_INTERPOLATIONS
+
+        def replace(match: "_re.Match[str]") -> str:
+            nonlocal count
+            count += 1
+            if count > max_interp:
+                return match.group(0)
+            # Escaped \${...} → literal ${...}
+            if match.group(0).startswith("\\"):
+                return "${" + match.group(1) + "}"
+            expr = match.group(1).strip()
+            if expr.startswith("%"):
+                call = _parse_inline_verb(expr)
+                if call is not None:
+                    value = self._execute_verb_call(
+                        call, ctx, current_source, current_output,
+                    )
+                    return _dyn_to_interp_string(value)
+                return match.group(0)
+            if expr.startswith("@"):
+                copy = CopyExpression(path=expr[1:])
+                value = self._evaluate_copy(
+                    copy, ctx, current_source, current_output,
+                )
+                return _dyn_to_interp_string(value)
+            return match.group(0)
+
+        return DynValue.of_string(_INTERP_RE.sub(replace, template))
 
     def _evaluate_copy(
         self,
@@ -865,6 +917,47 @@ class TransformEngine:
             return format_json(output)
         except Exception:
             return None
+
+
+# ── Interpolation Helpers ───────────────────────────────────────────────────────
+
+
+def _parse_inline_verb(expr: str) -> Optional[VerbCall]:
+    """Parse a `%verb args` expression into a VerbCall."""
+    from odin.transform.transform_parser import _parse_verb_from_string
+    return _parse_verb_from_string(expr)
+
+
+def _dyn_to_interp_string(value: DynValue) -> str:
+    """Render a DynValue as its interpolated string form."""
+    if value.is_null():
+        return ""
+    if value.is_string():
+        return value.as_string()
+    if value.is_array() or value.is_object():
+        return json.dumps(_dyn_to_plain(value))
+    from odin.transform.verbs.helpers import coerce_str
+    return coerce_str(value)
+
+
+def _dyn_to_plain(value: DynValue) -> Any:
+    """Convert a DynValue to plain Python values for JSON rendering."""
+    if value.is_null():
+        return None
+    if value.is_object():
+        return {k: _dyn_to_plain(v) for k, v in value.as_object().items()}
+    if value.is_array():
+        return [_dyn_to_plain(v) for v in value.as_array()]
+    if value.is_string():
+        return value.as_string()
+    if value.is_bool():
+        return value.as_bool()
+    if value.is_integer():
+        return value.as_int()
+    if value.is_number():
+        return value.as_float()
+    from odin.transform.verbs.helpers import coerce_str
+    return coerce_str(value)
 
 
 # ── Path Resolution ────────────────────────────────────────────────────────────

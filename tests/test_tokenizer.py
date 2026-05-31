@@ -203,6 +203,21 @@ class TestStrings:
         s = find_token(tokens, TokenType.STRING_QUOTED)
         assert s.value == "\U0001F600"
 
+    def test_escape_dollar_literal(self):
+        tokens = tok('x = "Total: \\$5"')
+        s = find_token(tokens, TokenType.STRING_QUOTED)
+        assert s.value == "Total: $5"
+
+    def test_escape_dollar_before_marker_preserves_backslash(self):
+        tokens = tok('x = "\\${@.field}"')
+        s = find_token(tokens, TokenType.STRING_QUOTED)
+        assert s.value == "\\${@.field}"
+
+    def test_escape_dollar_then_interpolation(self):
+        tokens = tok('x = "\\$${@.amount}"')
+        s = find_token(tokens, TokenType.STRING_QUOTED)
+        assert s.value == "$${@.amount}"
+
     def test_bare_string(self):
         tokens = tok("x = hello")
         s = find_token(tokens, TokenType.STRING_BARE)

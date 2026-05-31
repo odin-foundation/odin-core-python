@@ -225,6 +225,30 @@ class TestValueTypes:
         val = doc.get("billing")
         assert val.path == "customer.address.billing"
 
+    def test_integer_prefixed_reference(self):
+        doc = odin.parse("year = ##@.year")
+        val = doc.get("year")
+        assert isinstance(val, OdinReference)
+        assert val.path == ".year :type integer"
+
+    def test_currency_prefixed_reference(self):
+        doc = odin.parse("premium = #$@.premium")
+        val = doc.get("premium")
+        assert isinstance(val, OdinReference)
+        assert val.path == ".premium :type currency"
+
+    def test_number_prefixed_reference(self):
+        doc = odin.parse("rate = #@.rate")
+        val = doc.get("rate")
+        assert isinstance(val, OdinReference)
+        assert val.path == ".rate :type number"
+
+    def test_percent_prefixed_reference(self):
+        doc = odin.parse("share = #%@.share")
+        val = doc.get("share")
+        assert isinstance(val, OdinReference)
+        assert val.path == ".share :type percent"
+
     def test_binary(self):
         doc = odin.parse("data = ^SGVsbG8gV29ybGQh")
         val = doc.get("data")

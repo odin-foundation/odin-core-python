@@ -85,18 +85,30 @@ def parse_value(tokens: List[Token], pos: int) -> Tuple[OdinValue, int]:
 
     # Number #
     if tt == TokenType.PREFIX_NUMBER:
+        coerced = _parse_prefixed_reference(tokens, pos, "number")
+        if coerced is not None:
+            return coerced
         return _parse_number_value(tokens, pos)
 
     # Integer ##
     if tt == TokenType.PREFIX_INTEGER:
+        coerced = _parse_prefixed_reference(tokens, pos, "integer")
+        if coerced is not None:
+            return coerced
         return _parse_integer_value(tokens, pos)
 
     # Currency #$
     if tt == TokenType.PREFIX_CURRENCY:
+        coerced = _parse_prefixed_reference(tokens, pos, "currency")
+        if coerced is not None:
+            return coerced
         return _parse_currency_value(tokens, pos)
 
     # Percent #%
     if tt == TokenType.PREFIX_PERCENT:
+        coerced = _parse_prefixed_reference(tokens, pos, "percent")
+        if coerced is not None:
+            return coerced
         return _parse_percent_value(tokens, pos)
 
     # Reference @
@@ -373,6 +385,24 @@ def _parse_percent_value(tokens: List[Token], pos: int) -> Tuple[OdinPercent, in
             tokens[pos].column,
         )
     return OdinPercent(value=value, raw=raw), consumed
+
+
+def _parse_prefixed_reference(
+    tokens: List[Token], pos: int, kind: str,
+) -> Optional[Tuple[OdinReference, int]]:
+    """Parse a numeric prefix applied to a reference (e.g. ##@.year).
+
+    Produces a reference carrying a synthetic :type directive so the engine
+    coerces the resolved value on output. Returns None when the prefix is not
+    followed by a reference.
+    """
+    if pos + 1 >= len(tokens):
+        return None
+    if tokens[pos + 1].type != TokenType.PREFIX_REFERENCE:
+        return None
+    ref, ref_consumed = _parse_reference_value(tokens, pos + 1)
+    path = f"{ref.path} :type {kind}"
+    return OdinReference(path=path), ref_consumed + 1
 
 
 def _parse_reference_value(tokens: List[Token], pos: int) -> Tuple[OdinReference, int]:
