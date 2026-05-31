@@ -9,6 +9,7 @@ from odin.types.schema import (
     OdinSchema,
     SchemaField,
     SchemaFieldType,
+    SchemaType,
     SchemaArray,
     SchemaConditional,
     SchemaInvariant,
@@ -54,6 +55,7 @@ def validate(
     doc: OdinDocument,
     schema: OdinSchema,
     options: Optional[ValidateOptions] = None,
+    type_registry: Optional[Dict[str, Any]] = None,
 ) -> ValidationResult:
     """Validate a document against a schema.
 
@@ -63,6 +65,7 @@ def validate(
         doc: Document to validate
         schema: Schema to validate against
         options: Validation options
+        type_registry: Optional resolved-import type registry (alias.name keys)
 
     Returns:
         ValidationResult
@@ -82,7 +85,7 @@ def validate(
     # V012: Circular reference detection
     # V013: Unresolved reference detection
     # ------------------------------------------------------------------
-    _check_references(doc, errors, options, schema)
+    _check_references(doc, errors, options, schema, type_registry)
     if options.fail_fast and errors:
         return ValidationResult(valid=False, errors=errors, warnings=warnings)
 
@@ -131,7 +134,7 @@ def validate(
             continue
 
         # V002: Type mismatch
-        if not _type_matches(value, schema_field.field_type, schema):
+        if not _type_matches(value, schema_field.field_type, schema, type_registry):
             actual_type = _value_type_name(value)
             expected_type = _field_type_name(schema_field.field_type)
             if _add_error(ValidationError(
@@ -798,6 +801,7 @@ def _check_references(
     errors: List[ValidationError],
     options: ValidateOptions,
     schema: Optional[OdinSchema] = None,
+    type_registry: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Check V012 (circular references) and V013 (unresolved references)."""
     # Collect all reference paths from the document
@@ -842,56 +846,53 @@ def _check_references(
 
     # Schema-level reference checks
     if schema is not None:
-        _check_schema_references(schema, errors, options)
+        _check_schema_references(schema, errors, options, type_registry)
+
+
+def lookup_type(
+    schema: OdinSchema,
+    name: str,
+    type_registry: Optional[Dict[str, Any]] = None,
+) -> Optional[SchemaType]:
+    """Resolve a type reference: registry (alias.name) first, then local types."""
+    if type_registry and name in type_registry:
+        return type_registry[name]
+    return schema.types.get(name)
 
 
 def _check_schema_references(
     schema: OdinSchema,
     errors: List[ValidationError],
     options: ValidateOptions,
+    type_registry: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Check V012/V013 for schema-level type references."""
-    # Build a map of type names to the types they reference
+    all_type_names = set(schema.types.keys())
+
+    # V013: Unresolved top-level field type references
+    for field_path, field_def in schema.fields.items():
+        if isinstance(field_def.field_type, TypeRefType):
+            name = field_def.field_type.name
+            if lookup_type(schema, name, type_registry) is None:
+                errors.append(ValidationError(
+                    path=field_path,
+                    code="V013",
+                    message=f"Unresolved type reference: @{name}",
+                    expected="defined type",
+                    actual=name,
+                ))
+                if options.fail_fast:
+                    return
+
+    # V012: Circular schema type references among locally defined types
     type_refs: Dict[str, List[str]] = {}
     for type_name, schema_type in schema.types.items():
         refs = []
-        for field_name, field_def in schema_type.fields.items():
+        for field_def in schema_type.fields.values():
             if isinstance(field_def.field_type, TypeRefType):
                 refs.append(field_def.field_type.name)
         type_refs[type_name] = refs
 
-    # Also check fields that reference types
-    all_type_names = set(schema.types.keys())
-
-    # V013: Unresolved schema type references
-    for type_name, refs in type_refs.items():
-        for ref_name in refs:
-            if ref_name not in all_type_names:
-                errors.append(ValidationError(
-                    path=f"@{type_name}",
-                    code="V013",
-                    message=f"Unresolved type reference: @{ref_name}",
-                    expected="defined type",
-                    actual=ref_name,
-                ))
-                if options.fail_fast:
-                    return
-
-    # Check field-level type references
-    for field_path, field_def in schema.fields.items():
-        if isinstance(field_def.field_type, TypeRefType):
-            if field_def.field_type.name not in all_type_names:
-                errors.append(ValidationError(
-                    path=field_path,
-                    code="V013",
-                    message=f"Unresolved type reference: @{field_def.field_type.name}",
-                    expected="defined type",
-                    actual=field_def.field_type.name,
-                ))
-                if options.fail_fast:
-                    return
-
-    # V012: Circular schema type references
     for start_type in type_refs:
         visited: Set[str] = set()
         stack = [start_type]
@@ -919,7 +920,12 @@ def _check_schema_references(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _type_matches(value: OdinValue, field_type: SchemaFieldType, schema: OdinSchema) -> bool:
+def _type_matches(
+    value: OdinValue,
+    field_type: SchemaFieldType,
+    schema: OdinSchema,
+    type_registry: Optional[Dict[str, Any]] = None,
+) -> bool:
     """Check if a value matches the expected field type."""
     if isinstance(field_type, StringType):
         return isinstance(value, (OdinString, OdinDate, OdinTimestamp, OdinTime))
@@ -950,10 +956,10 @@ def _type_matches(value: OdinValue, field_type: SchemaFieldType, schema: OdinSch
     if isinstance(field_type, EnumType):
         return isinstance(value, OdinString)
     if isinstance(field_type, UnionType):
-        return any(_type_matches(value, t, schema) for t in field_type.types)
+        return any(_type_matches(value, t, schema, type_registry) for t in field_type.types)
     if isinstance(field_type, TypeRefType):
         # Resolve type reference
-        ref_type = schema.types.get(field_type.name)
+        ref_type = lookup_type(schema, field_type.name, type_registry)
         if ref_type is None:
             return True  # Unknown type reference — don't fail
         # For type refs, check that value fields match the type's field definitions

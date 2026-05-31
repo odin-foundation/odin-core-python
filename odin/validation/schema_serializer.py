@@ -56,7 +56,12 @@ def serialize_schema(schema: OdinSchema) -> str:
 
     # Import directives
     for imp in schema.imports:
-        parts.append(f"@import {imp}")
+        path = imp if isinstance(imp, str) else imp.path
+        alias = None if isinstance(imp, str) else imp.alias
+        line = f'@import "{path}"'
+        if alias:
+            line += f" as {alias}"
+        parts.append(line)
     if schema.imports:
         parts.append("")
 

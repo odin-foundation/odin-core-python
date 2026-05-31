@@ -144,10 +144,10 @@ class SchemaFlattener:
         self, resolution: ResolvedResult, schema: OdinSchema
     ) -> None:
         for name in resolution.type_registry:
-            underscore = name.find("_")
-            if underscore >= 0:
-                ns = name[:underscore]
-                type_name = name[underscore + 1:]
+            dot = name.find(".")
+            if dot >= 0:
+                ns = name[:dot]
+                type_name = name[dot + 1:]
                 self._type_source_map[type_name] = ns
 
         if schema.types:

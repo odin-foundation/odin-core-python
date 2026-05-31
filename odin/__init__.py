@@ -56,7 +56,7 @@ from odin.types.errors import OdinError, ParseError, PatchError, ParseErrorCodes
 from odin.types.options import ParseOptions, DumpOptions, ValidateOptions
 from odin.resolver import ImportResolver, ResolverOptions, SchemaFlattener
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 __all__ = [
     # Main functions
     "parse",
@@ -64,6 +64,7 @@ __all__ = [
     "dump",
     "dumps",
     "validate",
+    "validate_with_imports",
     "canonicalize",
     "diff",
     "patch",
@@ -238,6 +239,7 @@ def validate(
     doc: OdinDocument,
     schema: OdinSchema,
     options: Optional[ValidateOptions] = None,
+    type_registry=None,
 ) -> ValidationResult:
     """
     Validate a document against a schema.
@@ -246,6 +248,7 @@ def validate(
         doc: Document to validate
         schema: Schema to validate against
         options: Validation options
+        type_registry: Optional resolved-import type registry (alias.name keys)
 
     Returns:
         Validation result with errors and warnings
@@ -256,7 +259,33 @@ def validate(
         ...     print('Errors:', result.errors)
     """
     from odin.validation.validator import validate as _validate
-    return _validate(doc, schema, options)
+    return _validate(doc, schema, options, type_registry)
+
+
+def validate_with_imports(
+    doc: OdinDocument,
+    schema: OdinSchema,
+    base_path: str,
+    options: Optional[ValidateOptions] = None,
+    resolver_options: Optional[ResolverOptions] = None,
+) -> ValidationResult:
+    """
+    Resolve a schema's @imports relative to base_path, then validate the document.
+
+    Args:
+        doc: Document to validate
+        schema: Parsed schema (from parse_schema)
+        base_path: Path the schema was loaded from, for resolving relative @imports
+        options: Validation options
+        resolver_options: Import resolver options (e.g. sandbox_root)
+
+    Returns:
+        Validation result with errors and warnings
+    """
+    from odin.validation.validator import validate as _validate
+    resolver = ImportResolver(options=resolver_options)
+    resolved = resolver.resolve_schema(schema, base_path)
+    return _validate(doc, schema, options, resolved.resolution.type_registry)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

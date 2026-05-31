@@ -52,8 +52,8 @@ class TestBasicSerialization:
     def test_import_directives(self):
         schema = OdinSchema(imports=["./types.odin", "./base.odin"])
         result = serialize_schema(schema)
-        assert "@import ./types.odin" in result
-        assert "@import ./base.odin" in result
+        assert '@import "./types.odin"' in result
+        assert '@import "./base.odin"' in result
 
 
 # ─── Field Type Serialization ────────────────────────────────────────────────

@@ -210,6 +210,14 @@ class SchemaArray:
     columns: Optional[List[str]] = None
 
 
+@dataclass
+class SchemaImport:
+    """An @import directive with its declared alias."""
+    path: str = ""
+    alias: Optional[str] = None
+    line: int = 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Object-Level Constraints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -246,7 +254,7 @@ class OdinSchema:
     types: Dict[str, SchemaType] = field(default_factory=dict)
     fields: Dict[str, SchemaField] = field(default_factory=dict)
     arrays: Dict[str, SchemaArray] = field(default_factory=dict)
-    imports: List[str] = field(default_factory=list)
+    imports: List[SchemaImport] = field(default_factory=list)
     constraints: Dict[str, List[SchemaObjectConstraint]] = field(default_factory=dict)
 
 

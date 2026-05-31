@@ -258,9 +258,8 @@ class ImportResolver:
 
         # Resolve imports
         if hasattr(schema, "imports") and schema.imports:
-            for imp_path in schema.imports:
-                # Schema imports are stored as plain paths
-                alias = _path_to_alias(imp_path)
+            for imp in schema.imports:
+                imp_path, alias = _import_path_and_alias(imp)
                 self._resolve_schema_import(
                     imp_path, alias, base_path, detector, 0,
                     imports, type_registry, resolved_paths,
@@ -376,17 +375,16 @@ class ImportResolver:
 
             resolved_paths.append(resolved_path)
 
-            # Register imported types with namespace prefix
+            # Register imported types under the alias namespace
             namespace = alias
             if hasattr(imported_schema, "types") and imported_schema.types:
                 for type_name, type_def in imported_schema.types.items():
-                    qualified_name = f"{namespace}_{type_name}"
-                    type_registry[qualified_name] = type_def
+                    type_registry[f"{namespace}.{type_name}"] = type_def
 
             # Recursively resolve nested imports
             if hasattr(imported_schema, "imports") and imported_schema.imports:
-                for nested_path in imported_schema.imports:
-                    nested_alias = _path_to_alias(nested_path)
+                for nested_imp in imported_schema.imports:
+                    nested_path, nested_alias = _import_path_and_alias(nested_imp)
                     self._resolve_schema_import(
                         nested_path, nested_alias, resolved_path, detector,
                         depth + 1, imports, type_registry, resolved_paths,
@@ -541,6 +539,15 @@ def _path_to_alias(path: str) -> str:
     # "./types.odin" -> "types"
     name = Path(path).stem
     return name
+
+
+def _import_path_and_alias(imp: Any) -> tuple[str, str]:
+    """Normalize an import entry (str or SchemaImport) to (path, alias)."""
+    if isinstance(imp, str):
+        return imp, _path_to_alias(imp)
+    path = getattr(imp, "path", str(imp))
+    alias = getattr(imp, "alias", None) or _path_to_alias(path)
+    return path, alias
 
 
 # ─────────────────────────────────────────────────────────────────────────────

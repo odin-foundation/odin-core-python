@@ -15,6 +15,7 @@ from odin.types.schema import (
     SchemaObjectConstraint,
     SchemaInvariant,
     SchemaCardinality,
+    SchemaImport,
     StringType,
     BooleanType,
     NumberType,
@@ -57,7 +58,7 @@ class SchemaParser:
         self.types: Dict[str, SchemaType] = {}
         self.fields: Dict[str, SchemaField] = {}
         self.arrays: Dict[str, SchemaArray] = {}
-        self.imports: List[str] = []
+        self.imports: List[SchemaImport] = []
         self.constraints: Dict[str, List[SchemaObjectConstraint]] = {}
 
         # Current parsing context
@@ -65,6 +66,12 @@ class SchemaParser:
         self._current_header_kind: str = "root"  # root, metadata, type, array, object
         self._current_type_name: Optional[str] = None
         self._current_array_path: Optional[str] = None
+
+        # Relative-header context: last absolute header, and the sub-path of the
+        # current relative header within its parent (e.g. 'term' for {.term}).
+        self._previous_header_path: str = ""
+        self._previous_header_type: Optional[str] = None
+        self._current_type_sub_path: str = ""
 
     def parse(self) -> OdinSchema:
         """Parse all lines and return schema."""
@@ -76,7 +83,7 @@ class SchemaParser:
                 continue
 
             if line.startswith("@import "):
-                self._parse_import(line)
+                self._parse_import(line, self.pos)
             elif line.startswith("{") and "}" in line:
                 self._parse_header(line)
             elif line.startswith(":"):
@@ -93,12 +100,16 @@ class SchemaParser:
             constraints=self.constraints,
         )
 
-    def _parse_import(self, line: str) -> None:
-        """Parse @import directive."""
-        # @import ./path.odin as alias
-        parts = line[8:].strip().split()
-        if parts:
-            self.imports.append(parts[0])
+    def _parse_import(self, line: str, line_no: int) -> None:
+        """Parse @import directive: @import "<path>" [as <alias>]."""
+        rest = line[8:].strip()
+        path, after = _read_import_path(rest)
+        alias: Optional[str] = None
+        after = after.strip()
+        if after.startswith("as "):
+            alias = after[3:].strip() or None
+        if path:
+            self.imports.append(SchemaImport(path=path, alias=alias, line=line_no))
 
     def _parse_header(self, line: str) -> None:
         """Parse a header line like {$}, {@TypeName}, {path[]}, {path}."""
@@ -108,6 +119,29 @@ class SchemaParser:
 
         # Check for array constraint after the header
         after_header = line[brace_end + 1:].strip()
+
+        # Relative header ({.sub}): nest under the last absolute context, not the root.
+        if content.startswith("."):
+            sub_path = content[1:]
+            if self._previous_header_type is not None:
+                # Re-open the parent type; fields route under the sub-path (e.g. policy.term.*).
+                self._current_header = "@" + self._previous_header_type
+                self._current_header_kind = "type"
+                self._current_type_name = self._previous_header_type
+                self._current_array_path = None
+                self._current_type_sub_path = sub_path
+            else:
+                # Object context: relative headers nest under the last absolute path.
+                full = f"{self._previous_header_path}.{sub_path}" if self._previous_header_path else sub_path
+                self._current_header = full
+                self._current_header_kind = "object"
+                self._current_type_name = None
+                self._current_array_path = None
+                self._current_type_sub_path = ""
+            return
+
+        # Absolute header resets the relative sub-path context.
+        self._current_type_sub_path = ""
 
         if content == "$":
             self._current_header = "$"
@@ -126,6 +160,8 @@ class SchemaParser:
             self._current_header_kind = "type"
             self._current_type_name = type_name
             self._current_array_path = None
+            self._previous_header_type = type_name
+            self._previous_header_path = ""
             if type_name not in self.types:
                 self.types[type_name] = SchemaType(name=type_name)
         elif content.endswith("[]"):
@@ -141,6 +177,8 @@ class SchemaParser:
             self._current_header_kind = "array"
             self._current_type_name = None
             self._current_array_path = array_path
+            self._previous_header_path = array_path
+            self._previous_header_type = None
 
             array_def = SchemaArray(path=array_path)
 
@@ -155,6 +193,8 @@ class SchemaParser:
             self._current_header_kind = "object"
             self._current_type_name = None
             self._current_array_path = None
+            self._previous_header_path = content
+            self._previous_header_type = None
 
     def _parse_array_constraints(self, array_def: SchemaArray, text: str) -> None:
         """Parse constraints on an array definition line."""
@@ -257,6 +297,8 @@ class SchemaParser:
             self.metadata[field_name] = _unquote(right)
             return
         elif self._current_header_kind == "type":
+            # Prefix with sub-path when inside a relative sub-section like {.term}.
+            field_name = f"{self._current_type_sub_path}.{field_name}" if self._current_type_sub_path else field_name
             full_path = field_name
         elif self._current_header_kind == "array":
             full_path = field_name
@@ -611,6 +653,19 @@ _KEYWORD_TYPES: List[Tuple[str, type]] = [
     ("binary", BinaryType),
     ("null", NullType),
 ]
+
+
+def _read_import_path(s: str) -> Tuple[str, str]:
+    """Read an import path (quoted or bare), return (path, remaining)."""
+    s = s.strip()
+    if not s:
+        return "", ""
+    if s[0] in ('"', "'"):
+        quote = s[0]
+        end = s.index(quote, 1) if quote in s[1:] else len(s)
+        return s[1:end], s[end + 1:]
+    parts = s.split(None, 1)
+    return parts[0], parts[1] if len(parts) > 1 else ""
 
 
 def _unquote(s: str) -> str:

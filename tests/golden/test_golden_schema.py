@@ -43,3 +43,14 @@ def test_golden_schema(test_case):
 
     schema = odin.parse_schema(input_text)
     assert schema is not None
+
+    # Structural cases assert parsed type/root field keys; others are parse-success only.
+    if test_case.get("structural"):
+        expected = test_case.get("expected", {})
+        for type_name, type_spec in expected.get("types", {}).items():
+            assert type_name in schema.types, f"missing type {type_name}"
+            parsed_fields = schema.types[type_name].fields
+            for key in type_spec.get("fields", {}):
+                assert key in parsed_fields, f"missing field {key} in type {type_name}"
+        for key in expected.get("fields", {}):
+            assert key in schema.fields, f"missing root field {key}"
