@@ -23,14 +23,34 @@ def format_fixed_width(
     if transform is None:
         return ""
 
+    # A configured lineWidth pads every record to that width with padChar.
+    target_line_width: Optional[int] = None
+    pad_char = " "
+    opts = transform.target.options
+    if opts.get("lineWidth"):
+        try:
+            target_line_width = int(opts["lineWidth"])
+        except (ValueError, TypeError):
+            target_line_width = None
+    if opts.get("padChar"):
+        pc = opts["padChar"]
+        if pc:
+            pad_char = pc[0]
+
     lines: List[str] = []
-    _process_segments(value, transform.segments, lines)
+    _process_segments(value, transform.segments, lines, target_line_width, pad_char)
     if lines:
         return "\n".join(lines) + "\n"
     return ""
 
 
-def _process_segments(output: DynValue, segments: list, lines: List[str]):
+def _process_segments(
+    output: DynValue,
+    segments: list,
+    lines: List[str],
+    target_line_width: Optional[int] = None,
+    pad_char: str = " ",
+):
     """Process segments to produce fixed-width lines."""
     for segment in segments:
         name = segment.name
@@ -55,17 +75,26 @@ def _process_segments(output: DynValue, segments: list, lines: List[str]):
             if arr is not None and arr.is_array():
                 for item in arr.as_array():
                     line = _format_record(item, field_layout, line_width)
-                    lines.append(line)
+                    lines.append(_finalize_line(line, target_line_width, pad_char))
         else:
             # Single segment: one line
             seg_data = _get_nested(output, clean_name) if clean_name else output
             if seg_data is not None and seg_data.is_object():
                 line = _format_record(seg_data, field_layout, line_width)
-                lines.append(line)
+                lines.append(_finalize_line(line, target_line_width, pad_char))
 
         # Process child segments
         if segment.children:
-            _process_segments(output, segment.children, lines)
+            _process_segments(output, segment.children, lines, target_line_width, pad_char)
+
+
+def _finalize_line(line: str, target_line_width: Optional[int], pad_char: str) -> str:
+    """Pad a record to the configured line width, else trim trailing spaces."""
+    if target_line_width is not None:
+        if len(line) < target_line_width:
+            return line + pad_char * (target_line_width - len(line))
+        return line[:target_line_width]
+    return line.rstrip()
 
 
 def _extract_field_layout(segment) -> List[Dict[str, Any]]:
@@ -148,7 +177,7 @@ def _format_record(
             if target < line_width:
                 line[target] = ch
 
-    return "".join(line).rstrip()
+    return "".join(line)
 
 
 def _get_nested(value: DynValue, path: str) -> Optional[DynValue]:

@@ -29,7 +29,9 @@ from odin.transform.types import (
     TransformWarning,
 )
 from odin.transform.verb_registry import VerbRegistry
-from odin.transform.errors import dangling_branch_error
+import re as _re
+
+from odin.transform.errors import dangling_branch_error, validation_error
 from odin.transform.verbs.collection_verbs import _check_filter_condition
 from odin.types.document import OdinModifiers
 from odin.types.values import (
@@ -69,6 +71,7 @@ class _ExecContext:
         "loop_vars", "warnings", "errors",
         "enforce_confidential", "global_output", "field_modifiers",
         "source_format", "verb_registry", "loop_depth",
+        "on_validation",
     )
 
     def __init__(self) -> None:
@@ -85,6 +88,7 @@ class _ExecContext:
         self.source_format: str = ""
         self.verb_registry: Optional[VerbRegistry] = None
         self.loop_depth: int = 0
+        self.on_validation: str = "fail"
 
 
 class TransformEngine:
@@ -169,6 +173,7 @@ class TransformEngine:
         ctx.verb_registry = self.registry
         ctx.enforce_confidential = transform.enforce_confidential
         ctx.source_format = (transform.source.format if transform.source else "")
+        ctx.on_validation = transform.target.options.get("onValidation", "fail")
 
         # Init constants
         for name, value in transform.constants.items():
@@ -364,11 +369,9 @@ class TransformEngine:
             else (clean_name if not path_prefix else f"{path_prefix}.{clean_name}")
         )
 
-        # Discard segments (name starts with _)
-        if name.startswith("_") and not is_root:
-            for mapping in segment.mappings:
-                self._process_mapping(mapping, ctx, ctx.source, output, current_prefix)
-            return output
+        # Computation-only sink: a `_`-prefixed section runs for side effects
+        # only (accumulators, verbs) and never appears in the output.
+        is_sink = clean_name.startswith("_") and not is_root
 
         # Array loop
         if segment.source_path is not None:
@@ -394,6 +397,7 @@ class TransformEngine:
             result_items: List[DynValue] = []
 
             old_loop_vars = dict(ctx.loop_vars)
+            counter_name = segment.counter_name
 
             # Check if segment has ONLY "_" target mappings (identity/value-only semantics)
             is_value_only = all(m.target == "_" for m in segment.mappings)
@@ -402,6 +406,11 @@ class TransformEngine:
                 ctx.loop_vars["_item"] = item
                 ctx.loop_vars["_index"] = DynValue.of_integer(idx)
                 ctx.loop_vars["_length"] = DynValue.of_integer(len(items))
+                # A named counter is readable by name and via @$accumulator.<name>.
+                if counter_name:
+                    counter_val = DynValue.of_integer(idx)
+                    ctx.loop_vars[counter_name] = counter_val
+                    ctx.accumulators[counter_name] = counter_val
 
                 if is_value_only:
                     # Identity: the value IS the row
@@ -428,12 +437,21 @@ class TransformEngine:
             ctx.loop_vars = old_loop_vars
             ctx.loop_depth -= 1
 
+            if is_sink:
+                return output
+
             array_result = DynValue.of_array(result_items)
             if not is_root:
                 _set_path(output, clean_name, array_result)
             else:
                 output = array_result
 
+            return output
+
+        # Non-loop discard segment: run mappings for side effects only.
+        if is_sink:
+            for mapping in segment.mappings:
+                self._process_mapping(mapping, ctx, ctx.source, output, current_prefix)
             return output
 
         # Standard segment (no loop)
@@ -464,6 +482,16 @@ class TransformEngine:
         is_loop: bool = False,
     ) -> DynValue:
         try:
+            # Field :if / :unless conditions gate whether the field is emitted.
+            cond_source = current_source if (is_loop and not current_source.is_null()) else ctx.source
+            for d in mapping.directives:
+                if d.name == "if" and d.value is not None:
+                    if not _evaluate_condition(d.value, cond_source, ctx):
+                        return output
+                elif d.name == "unless" and d.value is not None:
+                    if _evaluate_condition(d.value, cond_source, ctx):
+                        return output
+
             # For verb expressions with extraction directives (pos/len/field),
             # pre-extract from the verb's reference argument before calling the verb
             expr = mapping.expression
@@ -484,6 +512,18 @@ class TransformEngine:
                 value = self._evaluate_expression(expr, ctx, current_source, output)
                 # Apply directives (type coercion etc.)
                 value = _apply_mapping_directives(value, mapping.directives, ctx.source_format)
+
+            # Validation modifiers: :validate / :enum / :range (honors onValidation).
+            if not _validate_field_value(value, mapping, ctx):
+                return output
+
+            # :raw emits inline JSON structurally instead of an escaped string.
+            if any(d.name == "raw" for d in mapping.directives):
+                value = _parse_raw_json_value(value)
+
+            # :array wraps the value in a single-element array.
+            if any(d.name == "array" for d in mapping.directives):
+                value = DynValue.of_array([value])
 
             # Confidential enforcement at mapping level
             if (mapping.modifiers is not None
@@ -1276,6 +1316,89 @@ def _get_extraction_directives(directives: List[Directive]) -> List[Directive]:
         if d.name in ("pos", "len", "field"):
             result.append(d)
     return result
+
+
+def _dyn_numeric_of(value: DynValue) -> Optional[float]:
+    """Return a numeric value for range checks, or None if not numeric."""
+    if value.is_number():
+        return value.as_float()
+    if value.is_string():
+        try:
+            return float(value.as_string())
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_raw_json_value(value: DynValue) -> DynValue:
+    """Parse a string value as JSON for :raw, producing a structural DynValue."""
+    if not value.is_string():
+        return value
+    import json as _json
+    try:
+        return _python_to_dyn(_json.loads(value.as_string()))
+    except (ValueError, TypeError):
+        return value
+
+
+def _validate_field_value(
+    value: DynValue, mapping: FieldMapping, ctx: _ExecContext
+) -> bool:
+    """Validate a value against :validate / :enum / :range directives.
+
+    Returns False when the field should be dropped (onValidation = skip).
+    """
+    if value.is_null():
+        return True
+
+    failures: List[str] = []
+
+    for d in mapping.directives:
+        if d.name == "validate" and d.value is not None:
+            pattern = d.value
+            text = value.as_string()
+            try:
+                if _re.search(pattern, text) is None:
+                    failures.append(f"value '{text}' does not match pattern '{pattern}'")
+            except _re.error:
+                failures.append(f"invalid validation pattern '{pattern}'")
+        elif d.name == "enum" and d.value is not None:
+            allowed = [v.strip().strip("\"'") for v in d.value.split(",")]
+            text = value.as_string()
+            if text not in allowed:
+                failures.append(f"value '{text}' is not one of [{', '.join(allowed)}]")
+        elif d.name == "range" and d.value is not None:
+            parts = d.value.split("..")
+            num = _dyn_numeric_of(value)
+            if num is None:
+                failures.append(
+                    f"value '{value.as_string()}' is not numeric for range {d.value}"
+                )
+            else:
+                lo = _try_float(parts[0]) if len(parts) > 0 else None
+                hi = _try_float(parts[1]) if len(parts) > 1 else None
+                if (lo is not None and num < lo) or (hi is not None and num > hi):
+                    failures.append(f"value {num} is outside range {d.value}")
+
+    if not failures:
+        return True
+
+    message = f"Validation failed for '{mapping.target}': {'; '.join(failures)}"
+    policy = ctx.on_validation
+    if policy == "warn":
+        ctx.warnings.append(TransformWarning(message=message, path=mapping.target))
+        return True
+    if policy == "skip":
+        return False
+    ctx.errors.append(validation_error(message, mapping.target))
+    return False
+
+
+def _try_float(text: str) -> Optional[float]:
+    try:
+        return float(text.strip())
+    except (ValueError, AttributeError):
+        return None
 
 
 def _apply_mapping_directives(

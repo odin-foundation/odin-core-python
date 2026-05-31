@@ -54,6 +54,9 @@ class TransformErrorCodes:
     # Conditional branch (elif/else) with no preceding if
     T012_DANGLING_BRANCH = "T012"
 
+    # Field value failed a :validate / :enum / :range constraint
+    T013_VALIDATION_FAILED = "T013"
+
     # Extended codes (implementation-specific)
     CONFIG_ERROR = "CONFIG_ERROR"
     UNKNOWN_RECORD_TYPE = "UNKNOWN_RECORD_TYPE"
@@ -187,6 +190,15 @@ def dangling_branch_error(directive: str, segment: str | None = None) -> Transfo
         code=TransformErrorCodes.T012_DANGLING_BRANCH,
         message=f"'{directive}' segment has no preceding 'if'",
         path=segment,
+    )
+
+
+def validation_error(message: str, field: str | None = None) -> TransformError:
+    """Create a T013 validation failure error."""
+    return TransformError(
+        code=TransformErrorCodes.T013_VALIDATION_FAILED,
+        message=message,
+        path=field,
     )
 
 

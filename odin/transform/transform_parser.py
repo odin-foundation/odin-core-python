@@ -552,6 +552,7 @@ def _build_segment(
             seg.children.append(child_seg)
 
     source_path = None
+    from_path = None
     mappings = []
 
     for entry in top_assignments:
@@ -600,6 +601,22 @@ def _build_segment(
                 source_path = value.path
             continue
 
+        # Handle _from directive (alternative loop source; takes priority over _loop)
+        if field == "_from":
+            if isinstance(value, OdinString):
+                from_path = value.value.lstrip("@").strip()
+            elif isinstance(value, OdinReference):
+                from_path = value.path
+            continue
+
+        # Handle _counter directive (loop counter name)
+        if field == "_counter":
+            if isinstance(value, OdinString):
+                seg.counter_name = value.value.lstrip("@").strip()
+            elif isinstance(value, OdinReference):
+                seg.counter_name = value.path
+            continue
+
         # Check for loop directive: _ = @items :loop
         if field == "_" and isinstance(value, OdinReference):
             ref_path = value.path
@@ -625,6 +642,9 @@ def _build_segment(
         if mapping is not None:
             mappings.append(mapping)
 
+    # _from takes priority over _loop / path as the loop source.
+    if from_path is not None:
+        source_path = from_path
     seg.source_path = source_path
     seg.mappings = mappings
 
@@ -678,6 +698,48 @@ def _build_mapping(
     )
 
 
+def _split_object_pairs(body: str) -> List[str]:
+    """Split an inline object body on commas not nested inside braces."""
+    pairs: List[str] = []
+    depth = 0
+    current = ""
+    for ch in body:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            pairs.append(current)
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        pairs.append(current)
+    return pairs
+
+
+def _build_object_expression(spec: str) -> ObjectExpression:
+    """Build an ObjectExpression from an inline `{key = @path, ...}` spec."""
+    inner = spec.strip()
+    if inner.startswith("{"):
+        inner = inner[1:]
+    if inner.endswith("}"):
+        inner = inner[:-1]
+    fields: List[FieldMapping] = []
+    if inner.strip():
+        for pair in _split_object_pairs(inner):
+            eq = pair.find("=")
+            if eq == -1:
+                continue
+            key = pair[:eq].strip()
+            rhs = pair[eq + 1:].strip()
+            if not key:
+                continue
+            expr, directives, _ = _parse_value_expression(OdinString(value=rhs))
+            fields.append(FieldMapping(target=key, expression=expr, directives=directives))
+    return ObjectExpression(fields=fields)
+
+
 def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List[Directive], Optional[OdinModifiers]]:
     """Parse an OdinValue into a FieldExpression with directives."""
     directives: List[Directive] = []
@@ -700,8 +762,9 @@ def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List
 
     if isinstance(value, OdinReference):
         path = value.path
+        path, special = _extract_special_directives(path)
         # Parse directives from reference path
-        directives = _parse_inline_directives(path)
+        directives = special + _parse_inline_directives(path)
         clean_path = _strip_directives(path)
         extra_modifiers = _extract_modifier_directives(directives)
         return CopyExpression(path=clean_path), directives, extra_modifiers
@@ -720,10 +783,19 @@ def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List
 
     if isinstance(value, OdinString):
         raw = value.value
+
+        # Inline object spec: `:object {k = @p, ...}` builds a nested object.
+        obj_match = _OBJECT_RE.search(raw)
+        if raw.lstrip().startswith(":object") and obj_match:
+            return _build_object_expression(obj_match.group(1)), [], None
+
+        # Pull rest-of-line (:if/:unless) and :object out before generic parsing.
+        raw, special = _extract_special_directives(raw)
+
         # Check if it's a reference pattern (@path)
         if raw.startswith("@"):
             path = raw[1:]
-            directives = _parse_inline_directives(path)
+            directives = special + _parse_inline_directives(path)
             clean_path = _strip_directives(path)
             extra_modifiers = _extract_modifier_directives(directives)
             return CopyExpression(path=clean_path), directives, extra_modifiers
@@ -731,7 +803,7 @@ def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List
         # Check if it's a verb pattern (%verb ...)
         if raw.startswith("%"):
             # Extract directives first
-            directives = _parse_inline_directives(raw)
+            directives = special + _parse_inline_directives(raw)
             if directives:
                 clean_raw = _strip_directives(raw)
                 extra_modifiers = _extract_modifier_directives(directives)
@@ -742,7 +814,7 @@ def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List
                 return TransformExpression(call=call), directives, extra_modifiers
 
         # Check for directives in the string
-        directives = _parse_inline_directives(raw)
+        directives = special + _parse_inline_directives(raw)
         if directives:
             clean = _strip_directives(raw)
             extra_modifiers = _extract_modifier_directives(directives)
@@ -751,6 +823,8 @@ def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List
                 return CopyExpression(path=clean[1:]), directives, extra_modifiers
             return LiteralExpression(value=OdinString(value=clean)), directives, extra_modifiers
 
+        if special:
+            return LiteralExpression(value=OdinString(value=raw)), special, None
         return LiteralExpression(value=value), directives, extra_modifiers
 
     # Fallback
@@ -1028,7 +1102,35 @@ _DIRECTIVE_RE = re.compile(r'(?<=\s):(\w+)(?:\s+"([^"]*)"|\s+([^\s:]+))?')
 # Boolean directives that never consume a following value
 _BOOLEAN_DIRECTIVES = frozenset({
     "trim", "required", "confidential", "deprecated", "attr", "loop",
+    "raw", "array", "cdata",
 })
+
+# Directives whose value is the entire remainder of the line (e.g. `:if a = b`).
+_REST_OF_LINE_RE = re.compile(r'\s+:(if|unless)\s+(.+)$')
+
+# Inline object spec: `:object {k = @p, ...}` (consumes a brace-balanced body).
+_OBJECT_RE = re.compile(r'(?:^|\s):object\s*(\{.*\})\s*$')
+
+
+def _extract_special_directives(text: str) -> Tuple[str, List[Directive]]:
+    """Pull rest-of-line (:if/:unless) and :object specs out of a directive string.
+
+    Returns (remaining_text, directives). The remaining text still carries any
+    other inline directives for the generic parser.
+    """
+    extracted: List[Directive] = []
+
+    obj = _OBJECT_RE.search(text)
+    if obj:
+        extracted.append(Directive(name="object", value=obj.group(1).strip()))
+        text = text[:obj.start()].rstrip()
+
+    rest = _REST_OF_LINE_RE.search(text)
+    if rest:
+        extracted.append(Directive(name=rest.group(1), value=rest.group(2).strip()))
+        text = text[:rest.start()].rstrip()
+
+    return text, extracted
 
 
 def _parse_inline_directives(text: str) -> List[Directive]:

@@ -45,9 +45,10 @@ def format_xml(
     Returns:
         XML string
     """
-    # Collect :attr and :ns fields from transform
+    # Collect :attr, :ns and :cdata fields from transform
     attr_fields: Set[str] = set()
     ns_fields: Dict[str, str] = {}
+    cdata_fields: Set[str] = set()
     namespaces: Dict[str, str] = {}
     emit_type_hints = True
     if transform is not None:
@@ -58,6 +59,8 @@ def format_xml(
                         attr_fields.add(f"{seg.name}.{m.target}")
                     elif d.name == "ns" and d.value:
                         ns_fields[f"{seg.name}.{m.target}"] = str(d.value)
+                    elif d.name == "cdata":
+                        cdata_fields.add(f"{seg.name}.{m.target}")
         namespaces = transform.target.namespaces
         emit_type_hints = transform.target.options.get("emitTypeHints") != "false"
 
@@ -72,13 +75,13 @@ def format_xml(
     if transform is not None and value.is_object():
         # Segment-based: each segment is a top-level element
         _write_segments(
-            value, transform.segments, attr_fields, ns_fields, namespaces,
+            value, transform.segments, attr_fields, ns_fields, cdata_fields, namespaces,
             include_odin_ns, emit_type_hints, parts, indent,
         )
     else:
         # Fallback: simple tree walk
         parts.append(f"<{_escape_name(root_element)}>")
-        _write_value(value, parts, indent, 1, set(), {}, emit_type_hints)
+        _write_value(value, parts, indent, 1, set(), {}, set(), emit_type_hints)
         parts.append(f"</{_escape_name(root_element)}>")
 
     return "\n".join(parts) + "\n"
@@ -89,6 +92,7 @@ def _write_segments(
     segments: list,
     attr_fields: Set[str],
     ns_fields: Dict[str, str],
+    cdata_fields: Set[str],
     namespaces: Dict[str, str],
     include_odin_ns: bool,
     emit_type_hints: bool,
@@ -109,15 +113,8 @@ def _write_segments(
             continue
 
         # Collect attr field names for this segment
-        seg_attr_fields: Set[str] = set()
-        for af in attr_fields:
-            prefix = f"{name}." if name.endswith("[]") else f"{clean_name}."
-            if af.startswith(prefix):
-                seg_attr_fields.add(af[len(prefix):])
-            # Also check with [] suffix
-            prefix2 = f"{clean_name}[]."
-            if af.startswith(prefix2):
-                seg_attr_fields.add(af[len(prefix2):])
+        seg_attr_fields = _segment_field_set(attr_fields, name, clean_name)
+        seg_cdata_fields = _segment_field_set(cdata_fields, name, clean_name)
 
         # Collect :ns prefixes keyed by bare field name for this segment
         seg_ns_fields: Dict[str, str] = {}
@@ -135,21 +132,34 @@ def _write_segments(
                     continue
                 # Array items don't carry root declarations
                 _write_element(
-                    clean_name, item, seg_attr_fields, seg_ns_fields, None,
-                    False, emit_type_hints, parts, indent, 0,
+                    clean_name, item, seg_attr_fields, seg_ns_fields, seg_cdata_fields,
+                    None, False, emit_type_hints, parts, indent, 0,
                 )
         elif seg_data.is_object():
             # Non-array segments carry the root namespace declarations
             _write_element(
-                clean_name, seg_data, seg_attr_fields, seg_ns_fields, namespaces,
-                include_odin_ns, emit_type_hints, parts, indent, 0,
+                clean_name, seg_data, seg_attr_fields, seg_ns_fields, seg_cdata_fields,
+                namespaces, include_odin_ns, emit_type_hints, parts, indent, 0,
             )
 
         if segment.children:
             _write_segments(
-                output, segment.children, attr_fields, ns_fields, namespaces,
-                include_odin_ns, emit_type_hints, parts, indent,
+                output, segment.children, attr_fields, ns_fields, cdata_fields,
+                namespaces, include_odin_ns, emit_type_hints, parts, indent,
             )
+
+
+def _segment_field_set(fields: Set[str], name: str, clean_name: str) -> Set[str]:
+    """Reduce qualified field names to the bare names belonging to a segment."""
+    result: Set[str] = set()
+    prefix = f"{name}." if name.endswith("[]") else f"{clean_name}."
+    prefix2 = f"{clean_name}[]."
+    for f in fields:
+        if f.startswith(prefix):
+            result.add(f[len(prefix):])
+        if f.startswith(prefix2):
+            result.add(f[len(prefix2):])
+    return result
 
 
 def _write_element(
@@ -157,6 +167,7 @@ def _write_element(
     value: DynValue,
     attr_fields: Set[str],
     ns_fields: Dict[str, str],
+    cdata_fields: Set[str],
     root_namespaces: Optional[Dict[str, str]],
     include_odin_ns: bool,
     emit_type_hints: bool,
@@ -187,7 +198,7 @@ def _write_element(
                 skip_keys.add(key)
 
     parts.append(f"{pad}<{safe_tag}{attrs_str}>")
-    _write_value(value, parts, indent, depth + 1, skip_keys, ns_fields, emit_type_hints)
+    _write_value(value, parts, indent, depth + 1, skip_keys, ns_fields, cdata_fields, emit_type_hints)
     parts.append(f"{pad}</{safe_tag}>")
 
 
@@ -234,6 +245,7 @@ def _write_value(
     depth: int,
     skip_keys: Set[str],
     ns_fields: Dict[str, str],
+    cdata_fields: Set[str],
     emit_type_hints: bool,
 ):
     """Write a DynValue as XML child elements."""
@@ -244,6 +256,7 @@ def _write_value(
             if key in skip_keys:
                 continue
             safe_name = _ns_qualify(_escape_name(key), key, ns_fields)
+            is_cdata = key in cdata_fields
             if val.is_null():
                 null_attr = ' odin:type="null"' if emit_type_hints else ""
                 parts.append(
@@ -252,7 +265,7 @@ def _write_value(
                 continue
             if val.is_object():
                 parts.append(f"{prefix}<{safe_name}>")
-                _write_value(val, parts, indent, depth + 1, set(), {}, emit_type_hints)
+                _write_value(val, parts, indent, depth + 1, set(), {}, set(), emit_type_hints)
                 parts.append(f"{prefix}</{safe_name}>")
             elif val.is_array():
                 for item in val.as_array():
@@ -264,23 +277,23 @@ def _write_value(
                         continue
                     if item.is_object():
                         parts.append(f"{prefix}<{safe_name}>")
-                        _write_value(item, parts, indent, depth + 1, set(), {}, emit_type_hints)
+                        _write_value(item, parts, indent, depth + 1, set(), {}, set(), emit_type_hints)
                         parts.append(f"{prefix}</{safe_name}>")
                     else:
                         text = _format_text(item)
                         type_attr = _type_attr(item) if emit_type_hints else ""
                         if text is not None:
+                            body = _cdata_wrap(text) if is_cdata else _escape_content(text)
                             parts.append(
-                                f"{prefix}<{safe_name}{type_attr}>"
-                                f"{_escape_content(text)}</{safe_name}>"
+                                f"{prefix}<{safe_name}{type_attr}>{body}</{safe_name}>"
                             )
             else:
                 text = _format_text(val)
                 type_attr = _type_attr(val) if emit_type_hints else ""
                 if text is not None:
+                    body = _cdata_wrap(text) if is_cdata else _escape_content(text)
                     parts.append(
-                        f"{prefix}<{safe_name}{type_attr}>"
-                        f"{_escape_content(text)}</{safe_name}>"
+                        f"{prefix}<{safe_name}{type_attr}>{body}</{safe_name}>"
                     )
 
 
@@ -329,6 +342,12 @@ def _format_text(value: DynValue) -> Optional[str]:
         dp = value.get_decimal_places()
         return f"{v:.{dp}f}" if dp >= 0 else str(v)
     return value.as_string()
+
+
+def _cdata_wrap(text: str) -> str:
+    """Wrap element text in a CDATA section, splitting any embedded `]]>`."""
+    safe = text.replace("]]>", "]]]]><![CDATA[>")
+    return f"<![CDATA[{safe}]]>"
 
 
 def _escape_content(text: str) -> str:

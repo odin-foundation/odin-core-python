@@ -166,6 +166,7 @@ class TransformSegment:
     condition: Optional[str] = None
     condition_expr: Optional[FieldExpression] = None
     branch: Optional[str] = None  # 'if' | 'elif' | 'else' for conditional chains
+    counter_name: Optional[str] = None  # loop counter declared via :counter
 
 
 # ── Source / Target Config ─────────────────────────────────────────────────────

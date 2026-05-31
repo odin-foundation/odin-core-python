@@ -33,6 +33,11 @@ _PATH_TYPES = frozenset({
     TokenType.PREFIX_EXTENSION, TokenType.PREFIX_META, TokenType.BOOLEAN,
 })
 
+# Segment directives that may appear as a bare `:name args` body line.
+_BARE_DIRECTIVES = frozenset({
+    "loop", "counter", "from", "if", "elif", "else", "literal",
+})
+
 
 class OdinParser:
     """Parser that builds OdinDocument from ODIN text."""
@@ -242,6 +247,18 @@ class OdinParser:
                                 )
                         continue
 
+            # Bare segment-directive line (e.g. `:loop vehicles`, `:counter idx`, `:from path`)
+            if (
+                tabular_columns is None
+                and tt == TokenType.ERROR
+                and token.value == ":"
+                and self._is_bare_directive_line(tokens, pos, end)
+            ):
+                pos = self._parse_bare_directive(
+                    tokens, pos, end, current_header, builder, assigned_paths,
+                )
+                continue
+
             # Tabular data rows
             if tabular_columns is not None and tt != TokenType.HEADER_OPEN:
                 if self._is_assignment_start(tokens, pos, end):
@@ -321,6 +338,57 @@ class OdinParser:
                 continue
             break
         return False
+
+    def _is_bare_directive_line(self, tokens: List[Token], pos: int, end: int) -> bool:
+        """True when the `:` at pos begins a bare segment-directive line."""
+        i = pos + 1
+        while i < end and tokens[i].type == TokenType.WHITESPACE:
+            i += 1
+        if i >= end:
+            return False
+        t = tokens[i]
+        return t.type == TokenType.IDENTIFIER and t.value in _BARE_DIRECTIVES
+
+    def _parse_bare_directive(
+        self,
+        tokens: List[Token],
+        pos: int,
+        end: int,
+        current_header: Optional[str],
+        builder: OdinDocumentBuilder,
+        assigned_paths: Set[str],
+    ) -> int:
+        """Parse `:name rest-of-line` into a synthetic `<header>._name = "rest"` assignment."""
+        pos += 1  # consume :
+        while pos < end and tokens[pos].type == TokenType.WHITESPACE:
+            pos += 1
+        name = tokens[pos].value
+        pos += 1  # consume directive name
+
+        # Collect the rest of the line (up to newline/comment), preserving the
+        # original spacing between tokens via column gaps.
+        parts: List[str] = []
+        prev_end: Optional[int] = None
+        while pos < end and tokens[pos].type not in (
+            TokenType.NEWLINE, TokenType.EOF, TokenType.COMMENT,
+        ):
+            t = tokens[pos]
+            if t.type == TokenType.WHITESPACE:
+                pos += 1
+                continue
+            text = f'"{t.value}"' if t.type == TokenType.STRING_QUOTED else (t.raw or t.value)
+            if prev_end is not None and t.column > prev_end:
+                parts.append(" ")
+            parts.append(text)
+            prev_end = t.column + len(t.raw or t.value or "")
+            pos += 1
+        value = "".join(parts).strip() or "true"
+
+        full_path = f"{current_header}._{name}" if current_header else f"_{name}"
+        if full_path not in assigned_paths:
+            assigned_paths.add(full_path)
+            builder.set(full_path, OdinString(value=value))
+        return pos
 
     def _reconstruct_header_expr(
         self, tokens: List[Token], pos: int, end: int
@@ -422,12 +490,12 @@ class OdinParser:
                     self._pending_header_directive = ("_type", tokens[pos + 2].value)
                     pos += 3
                     continue
-                # {Section :if <expr>} / {Section :elif <expr>}: capture the
+                # {Section :if <expr>} / :elif / :loop / :counter / :from: capture the
                 # unquoted expression up to the closing brace
                 if (
                     pos + 1 < end
                     and tokens[pos + 1].type == TokenType.IDENTIFIER
-                    and tokens[pos + 1].value in ("if", "elif")
+                    and tokens[pos + 1].value in ("if", "elif", "loop", "counter", "from")
                 ):
                     directive_name = tokens[pos + 1].value
                     expr_text, new_pos = self._reconstruct_header_expr(tokens, pos + 2, end)
