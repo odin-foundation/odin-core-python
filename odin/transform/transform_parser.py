@@ -210,14 +210,33 @@ def _parse_source_discriminator(doc: OdinDocument) -> Optional[SourceDiscriminat
 def _parse_target_config(doc: OdinDocument) -> TransformTargetConfig:
     fmt = _get_meta_string(doc, "target.format") or ""
     options: Dict[str, str] = {}
+    namespaces: Dict[str, str] = {}
 
+    # Check metadata keys (from {$} header: target.namespace.*, target.*)
     for key in _all_meta_keys(doc):
-        if key.startswith("target."):
+        if key.startswith("target.namespace."):
+            ns_name = key[len("target.namespace."):]
+            namespaces[ns_name] = _odin_value_to_string(_get_meta_value(doc, key))
+        elif key.startswith("target."):
             rest = key[len("target."):]
             if rest != "format":
                 options[rest] = _odin_value_to_string(_get_meta_value(doc, key))
 
-    return TransformTargetConfig(format=fmt, options=options)
+    # Also check $target.* paths (from {$target.namespace} section header)
+    for path in doc.paths():
+        if path.startswith("$target."):
+            rest = path[len("$target."):]
+            if rest.startswith("namespace."):
+                ns_name = rest[len("namespace."):]
+                val = doc.get(path)
+                if val is not None:
+                    namespaces[ns_name] = _odin_value_to_string(val)
+            elif rest != "format":
+                val = doc.get(path)
+                if val is not None:
+                    options[rest] = _odin_value_to_string(val)
+
+    return TransformTargetConfig(format=fmt, options=options, namespaces=namespaces)
 
 
 # ── Enforce Confidential ──────────────────────────────────────────────────────

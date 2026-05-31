@@ -181,6 +181,7 @@ class TransformSourceConfig:
 class TransformTargetConfig:
     format: str = ""
     options: Dict[str, str] = field(default_factory=dict)
+    namespaces: Dict[str, str] = field(default_factory=dict)
 
 
 # ── Metadata ───────────────────────────────────────────────────────────────────

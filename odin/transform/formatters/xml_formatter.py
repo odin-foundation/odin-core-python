@@ -45,15 +45,25 @@ def format_xml(
     Returns:
         XML string
     """
-    # Collect :attr fields from transform
+    # Collect :attr and :ns fields from transform
     attr_fields: Set[str] = set()
+    ns_fields: Dict[str, str] = {}
+    namespaces: Dict[str, str] = {}
+    emit_type_hints = True
     if transform is not None:
         for seg in transform.segments:
             for m in seg.mappings:
                 for d in m.directives:
                     if d.name == "attr":
                         attr_fields.add(f"{seg.name}.{m.target}")
-                        break
+                    elif d.name == "ns" and d.value:
+                        ns_fields[f"{seg.name}.{m.target}"] = str(d.value)
+        namespaces = transform.target.namespaces
+        emit_type_hints = transform.target.options.get("emitTypeHints") != "false"
+
+    # Emit the odin namespace only when type hints are on and the document
+    # carries any odin: attribute (typed or null values).
+    include_odin_ns = emit_type_hints and _needs_odin_ns(value, attr_fields)
 
     parts: List[str] = []
     if declaration:
@@ -61,11 +71,14 @@ def format_xml(
 
     if transform is not None and value.is_object():
         # Segment-based: each segment is a top-level element
-        _write_segments(value, transform.segments, attr_fields, parts, indent)
+        _write_segments(
+            value, transform.segments, attr_fields, ns_fields, namespaces,
+            include_odin_ns, emit_type_hints, parts, indent,
+        )
     else:
         # Fallback: simple tree walk
         parts.append(f"<{_escape_name(root_element)}>")
-        _write_value(value, parts, indent, 1, set())
+        _write_value(value, parts, indent, 1, set(), {}, emit_type_hints)
         parts.append(f"</{_escape_name(root_element)}>")
 
     return "\n".join(parts) + "\n"
@@ -75,6 +88,10 @@ def _write_segments(
     output: DynValue,
     segments: list,
     attr_fields: Set[str],
+    ns_fields: Dict[str, str],
+    namespaces: Dict[str, str],
+    include_odin_ns: bool,
+    emit_type_hints: bool,
     parts: List[str],
     indent: str,
 ):
@@ -102,29 +119,47 @@ def _write_segments(
             if af.startswith(prefix2):
                 seg_attr_fields.add(af[len(prefix2):])
 
+        # Collect :ns prefixes keyed by bare field name for this segment
+        seg_ns_fields: Dict[str, str] = {}
+        for nf, ns_prefix in ns_fields.items():
+            prefix = f"{name}." if name.endswith("[]") else f"{clean_name}."
+            if nf.startswith(prefix):
+                seg_ns_fields[nf[len(prefix):]] = ns_prefix
+            prefix2 = f"{clean_name}[]."
+            if nf.startswith(prefix2):
+                seg_ns_fields[nf[len(prefix2):]] = ns_prefix
+
         if is_array and seg_data.is_array():
             for item in seg_data.as_array():
                 if not item.is_object():
                     continue
-                # Array items don't get xmlns:odin
+                # Array items don't carry root declarations
                 _write_element(
-                    clean_name, item, seg_attr_fields, False, parts, indent, 0,
+                    clean_name, item, seg_attr_fields, seg_ns_fields, None,
+                    False, emit_type_hints, parts, indent, 0,
                 )
         elif seg_data.is_object():
-            # Non-array segments always get xmlns:odin
+            # Non-array segments carry the root namespace declarations
             _write_element(
-                clean_name, seg_data, seg_attr_fields, True, parts, indent, 0,
+                clean_name, seg_data, seg_attr_fields, seg_ns_fields, namespaces,
+                include_odin_ns, emit_type_hints, parts, indent, 0,
             )
 
         if segment.children:
-            _write_segments(output, segment.children, attr_fields, parts, indent)
+            _write_segments(
+                output, segment.children, attr_fields, ns_fields, namespaces,
+                include_odin_ns, emit_type_hints, parts, indent,
+            )
 
 
 def _write_element(
     tag: str,
     value: DynValue,
     attr_fields: Set[str],
-    include_ns: bool,
+    ns_fields: Dict[str, str],
+    root_namespaces: Optional[Dict[str, str]],
+    include_odin_ns: bool,
+    emit_type_hints: bool,
     parts: List[str],
     indent: str,
     depth: int,
@@ -135,8 +170,11 @@ def _write_element(
 
     # Build attribute string
     attrs_str = ""
-    if include_ns:
-        attrs_str += ' xmlns:odin="https://odin.foundation/ns"'
+    if root_namespaces is not None:
+        if include_odin_ns:
+            attrs_str += ' xmlns:odin="https://odin.foundation/ns"'
+        for ns_prefix, uri in root_namespaces.items():
+            attrs_str += f' xmlns:{_escape_name(ns_prefix)}="{_escape_attr(uri)}"'
 
     # Collect :attr fields as XML attributes
     skip_keys: Set[str] = set()
@@ -149,8 +187,27 @@ def _write_element(
                 skip_keys.add(key)
 
     parts.append(f"{pad}<{safe_tag}{attrs_str}>")
-    _write_value(value, parts, indent, depth + 1, skip_keys)
+    _write_value(value, parts, indent, depth + 1, skip_keys, ns_fields, emit_type_hints)
     parts.append(f"{pad}</{safe_tag}>")
+
+
+def _needs_odin_ns(value: DynValue, attr_fields: Set[str]) -> bool:
+    """Check if a value tree will emit any odin: attribute (typed or null values)."""
+    if value.is_object():
+        for key, val in value.as_object().items():
+            if key in attr_fields:
+                continue
+            if val.is_null() or val.type in _TYPE_MAP:
+                return True
+            if (val.is_object() or val.is_array()) and _needs_odin_ns(val, set()):
+                return True
+    elif value.is_array():
+        for item in value.as_array():
+            if item.is_null() or item.type in _TYPE_MAP:
+                return True
+            if (item.is_object() or item.is_array()) and _needs_odin_ns(item, set()):
+                return True
+    return False
 
 
 def _has_typed_values(value: DynValue, attr_fields: Set[str]) -> bool:
@@ -176,6 +233,8 @@ def _write_value(
     indent: str,
     depth: int,
     skip_keys: Set[str],
+    ns_fields: Dict[str, str],
+    emit_type_hints: bool,
 ):
     """Write a DynValue as XML child elements."""
     prefix = indent * depth
@@ -184,30 +243,32 @@ def _write_value(
         for key, val in value.as_object().items():
             if key in skip_keys:
                 continue
-            safe_name = _escape_name(key)
+            safe_name = _ns_qualify(_escape_name(key), key, ns_fields)
             if val.is_null():
+                null_attr = ' odin:type="null"' if emit_type_hints else ""
                 parts.append(
-                    f'{prefix}<{safe_name} odin:type="null"></{safe_name}>'
+                    f'{prefix}<{safe_name}{null_attr}></{safe_name}>'
                 )
                 continue
             if val.is_object():
                 parts.append(f"{prefix}<{safe_name}>")
-                _write_value(val, parts, indent, depth + 1, set())
+                _write_value(val, parts, indent, depth + 1, set(), {}, emit_type_hints)
                 parts.append(f"{prefix}</{safe_name}>")
             elif val.is_array():
                 for item in val.as_array():
                     if item.is_null():
+                        null_attr = ' odin:type="null"' if emit_type_hints else ""
                         parts.append(
-                            f'{prefix}<{safe_name} odin:type="null"></{safe_name}>'
+                            f'{prefix}<{safe_name}{null_attr}></{safe_name}>'
                         )
                         continue
                     if item.is_object():
                         parts.append(f"{prefix}<{safe_name}>")
-                        _write_value(item, parts, indent, depth + 1, set())
+                        _write_value(item, parts, indent, depth + 1, set(), {}, emit_type_hints)
                         parts.append(f"{prefix}</{safe_name}>")
                     else:
                         text = _format_text(item)
-                        type_attr = _type_attr(item)
+                        type_attr = _type_attr(item) if emit_type_hints else ""
                         if text is not None:
                             parts.append(
                                 f"{prefix}<{safe_name}{type_attr}>"
@@ -215,7 +276,7 @@ def _write_value(
                             )
             else:
                 text = _format_text(val)
-                type_attr = _type_attr(val)
+                type_attr = _type_attr(val) if emit_type_hints else ""
                 if text is not None:
                     parts.append(
                         f"{prefix}<{safe_name}{type_attr}>"
@@ -223,12 +284,24 @@ def _write_value(
                     )
 
 
+def _ns_qualify(safe_name: str, key: str, ns_fields: Dict[str, str]) -> str:
+    """Prefix an element name with its target namespace when the field carries :ns."""
+    ns_prefix = ns_fields.get(key)
+    return f"{_escape_name(ns_prefix)}:{safe_name}" if ns_prefix else safe_name
+
+
 def _type_attr(value: DynValue) -> str:
     """Return odin:type attribute string for non-string types."""
+    # Currency always renders as currency; emit currencyCode when coded.
+    if value.type in (DynType.CURRENCY, DynType.CURRENCY_RAW):
+        code = value.get_currency_code()
+        if code:
+            return f' odin:type="currency" odin:currencyCode="{code}"'
+        return ' odin:type="currency"'
     type_name = _TYPE_MAP.get(value.type)
-    if type_name:
-        return f' odin:type="{type_name}"'
-    return ""
+    if not type_name:
+        return ""
+    return f' odin:type="{type_name}"'
 
 
 def _format_text(value: DynValue) -> Optional[str]:
@@ -245,16 +318,16 @@ def _format_text(value: DynValue) -> Optional[str]:
             return str(int(v))
         return str(v)
     if value.type in (DynType.CURRENCY, DynType.CURRENCY_RAW):
+        # Preserve the raw decimal string when available; otherwise render at scale.
         if value.type == DynType.CURRENCY_RAW:
             raw = value.as_string()
             if raw:
                 return raw
         v = value.as_float()
-        if v is not None:
-            if v == int(v) and abs(v) < 1e15:
-                return str(int(v))
-            return str(v)
-        return "0"
+        if v is None:
+            return "0"
+        dp = value.get_decimal_places()
+        return f"{v:.{dp}f}" if dp >= 0 else str(v)
     return value.as_string()
 
 

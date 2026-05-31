@@ -89,17 +89,23 @@ def _parse_input(raw: str, fmt: str):
 def _odin_doc_to_dyn(doc):
     """Convert an OdinDocument to a DynValue tree via toJSON (plain types).
 
-    Matches TypeScript behavior: Odin.parse(input).toJSON() loses type info.
+    Matches default behavior: Odin.parse(input).toJSON() loses type info.
     Currency becomes plain number, date becomes string, etc.
     """
-    import json as json_mod
     import odin as odin_mod
-    from odin.transform.dyn_value import DynValue
     from odin.transform.source_parsers.json_parser import parse_json
 
     # Use to_json export to get plain JSON, then re-parse as JSON source
     json_str = odin_mod.to_json(doc, indent=None, omit_nulls=False)
     return parse_json(json_str)
+
+
+def _odin_doc_to_dyn_typed(raw: str):
+    """Parse ODIN type-preservingly so currency type + scale survive to XML."""
+    import odin as odin_mod
+    from odin.transform.engine import _odin_doc_to_dyn as engine_odin_doc_to_dyn
+
+    return engine_odin_doc_to_dyn(odin_mod.parse(raw))
 
 
 def _dict_to_dyn(obj):
@@ -189,7 +195,11 @@ def _run_transform_test(test, cat_dir):
     expected = _normalize(expected_path.read_text(encoding="utf-8"))
 
     transform = odin.parse_transform(transform_text)
-    source = _parse_input(input_raw, src_fmt)
+    # Feed raw ODIN type-preservingly for XML export so currency type + scale survive.
+    if src_fmt == "odin" and transform.target.format == "xml":
+        source = _odin_doc_to_dyn_typed(input_raw)
+    else:
+        source = _parse_input(input_raw, src_fmt)
     result = odin.execute_transform(transform, source)
 
     assert not result.errors, (

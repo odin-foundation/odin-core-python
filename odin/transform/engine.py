@@ -998,7 +998,7 @@ def _try_odin_value_to_dyn(value: Any) -> Optional[DynValue]:
     if isinstance(value, OdinNumber):
         return DynValue.of_float(value.value)
     if isinstance(value, OdinCurrency):
-        return DynValue.of_currency(value.value, dp=getattr(value, 'decimal_places', 2))
+        return DynValue.of_currency(value.value, code=getattr(value, 'currency_code', None), dp=getattr(value, 'decimal_places', 2))
     if isinstance(value, OdinPercent):
         return DynValue.of_float(value.value)
     if isinstance(value, OdinString):
@@ -1025,7 +1025,7 @@ def _odin_value_to_dyn(value: Any) -> DynValue:
     if isinstance(value, OdinNumber):
         return DynValue.of_float(value.value)
     if isinstance(value, OdinCurrency):
-        return DynValue.of_currency(value.value, dp=getattr(value, 'decimal_places', 2))
+        return DynValue.of_currency(value.value, code=getattr(value, 'currency_code', None), dp=getattr(value, 'decimal_places', 2))
     if isinstance(value, OdinPercent):
         return DynValue.of_float(value.value)
     if isinstance(value, OdinString):
