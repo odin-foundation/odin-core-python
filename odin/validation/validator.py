@@ -49,6 +49,8 @@ from odin.types.options import ValidateOptions
 from odin.validation.constraints import check_bounds, check_pattern, check_enum
 from odin.validation.format_validators import validate as validate_format
 from odin.validation.redos_protection import is_safe_pattern
+from odin.validation.invariant_evaluator import evaluate_invariant
+from odin.validation.validate_schema_def import validate_schema_definition
 
 
 def validate(
@@ -165,6 +167,21 @@ def validate(
                     path=field_path,
                     code="V003",
                     message=f"Decimal places mismatch at {field_path}: expected exactly {schema_field.field_type.places}",
+                    expected=schema_field.field_type.places,
+                    actual=actual_places,
+                )):
+                    return ValidationResult(valid=False, errors=errors, warnings=warnings)
+
+        # V003: Currency decimal places mismatch (#$.N enforces exactly N places)
+        if isinstance(schema_field.field_type, CurrencyType) and isinstance(value, OdinCurrency):
+            raw = value.raw if value.raw is not None else str(value.value)
+            dot = raw.find(".")
+            actual_places = 0 if dot < 0 else len(raw) - dot - 1
+            if actual_places != schema_field.field_type.places:
+                if _add_error(ValidationError(
+                    path=field_path,
+                    code="V003",
+                    message=f"Currency decimal places mismatch at {field_path}: expected exactly {schema_field.field_type.places}",
                     expected=schema_field.field_type.places,
                     actual=actual_places,
                 )):
@@ -292,6 +309,11 @@ def validate(
         _check_unknown_fields(doc, schema, errors, options)
         if options.fail_fast and errors:
             return ValidationResult(valid=False, errors=errors, warnings=warnings)
+
+    # ------------------------------------------------------------------
+    # V017: Schema-definition well-formedness (override/intersection/tabular/default)
+    # ------------------------------------------------------------------
+    validate_schema_definition(schema, errors, type_registry)
 
     return ValidationResult(
         valid=len(errors) == 0,
@@ -573,153 +595,43 @@ def _check_invariant(
     errors: List[ValidationError],
     options: ValidateOptions,
 ) -> None:
-    """Evaluate a simple invariant expression.
+    """Evaluate an invariant expression over the full grammar.
 
-    Supports expressions like:
-      field1 > field2
-      field1 != field2
-      field1 = "literal"
-      field1 >= 0
+    A null operand makes the expression false (V008). Absent operands make the
+    invariant inapplicable. A malformed expression is reported as V008.
     """
     expr = invariant.expression.strip()
     if not expr:
         return
 
-    # Spec: any present-but-null operand makes the invariant evaluate to false.
-    if _has_null_operand(expr, section_path, doc):
+    def resolve(name: str) -> Optional[OdinValue]:
+        full_path = f"{section_path}.{name}" if section_path else name
+        return doc.get(full_path)
+
+    try:
+        result = evaluate_invariant(expr, resolve)
+    except Exception:
+        errors.append(ValidationError(
+            path=section_path,
+            code="V008",
+            message=f"Invalid invariant expression: {expr}",
+            expected=f"{expr} to be valid",
+            actual="parse error",
+        ))
+        return
+
+    # Absent operands: invariant does not apply.
+    if result.value is None and not result.null_operand:
+        return
+
+    if result.value is False:
         errors.append(ValidationError(
             path=section_path,
             code="V008",
             message=f"Invariant violation: {expr}",
             expected=f"{expr} to be true",
-            actual="null operand",
+            actual="null operand" if result.null_operand else "false",
         ))
-        return
-
-    # Parse binary expression: left op right
-    operators = ["!=", ">=", "<=", "=", ">", "<"]
-    op = None
-    left_str = None
-    right_str = None
-
-    for candidate_op in operators:
-        idx = expr.find(candidate_op)
-        if idx > 0:
-            op = candidate_op
-            left_str = expr[:idx].strip()
-            right_str = expr[idx + len(candidate_op):].strip()
-            break
-
-    if op is None or left_str is None or right_str is None:
-        return  # Unparseable expression — skip
-
-    # Resolve left and right values
-    left_val = _resolve_invariant_value(left_str, section_path, doc)
-    right_val = _resolve_invariant_value(right_str, section_path, doc)
-
-    # If either side can't be resolved, skip (don't fail on missing fields)
-    if left_val is None or right_val is None:
-        return
-
-    if not _compare_values(left_val, op, right_val):
-        errors.append(ValidationError(
-            path=section_path,
-            code="V008",
-            message=f"Invariant violation: {expr}",
-            expected=f"{left_str} {op} {right_str}",
-            actual=f"{left_val} vs {right_val}",
-        ))
-
-
-_INVARIANT_KEYWORDS = {"true", "false"}
-
-
-def _has_null_operand(expr: str, section_path: str, doc: OdinDocument) -> bool:
-    """Return True if any field operand is present in the document with a null value.
-
-    Absent fields are not treated as null operands; their absence is handled by
-    field-level required validation.
-    """
-    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", expr)
-    for token in tokens:
-        if token in _INVARIANT_KEYWORDS:
-            continue
-        full_path = f"{section_path}.{token}" if section_path else token
-        value = doc.get(full_path)
-        if value is None and section_path:
-            value = doc.get(token)
-        if isinstance(value, OdinNull):
-            return True
-    return False
-
-
-def _resolve_invariant_value(
-    token: str, section_path: str, doc: OdinDocument
-) -> Any:
-    """Resolve an invariant token to a Python value.
-
-    Handles:
-    - Quoted strings: "foo"
-    - Numeric literals: 42, 3.14
-    - Boolean literals: true, false
-    - Arithmetic expressions: field1 + field2, field1 - field2
-    - Field references: field_name (resolved relative to section_path)
-    """
-    # Quoted string literal
-    if (token.startswith('"') and token.endswith('"')) or \
-       (token.startswith("'") and token.endswith("'")):
-        return token[1:-1]
-
-    # Boolean literals
-    if token.lower() == "true":
-        return True
-    if token.lower() == "false":
-        return False
-
-    # Numeric literal
-    try:
-        if "." in token:
-            return float(token)
-        return int(token)
-    except ValueError:
-        pass
-
-    # Arithmetic expression: check for + or - between tokens
-    for arith_op in [" + ", " - ", " * ", " / "]:
-        if arith_op in token:
-            parts = token.split(arith_op, 1)
-            left = _resolve_invariant_value(parts[0].strip(), section_path, doc)
-            right = _resolve_invariant_value(parts[1].strip(), section_path, doc)
-            if left is not None and right is not None:
-                try:
-                    l_num = float(left) if not isinstance(left, (int, float)) else left
-                    r_num = float(right) if not isinstance(right, (int, float)) else right
-                    if arith_op == " + ":
-                        return l_num + r_num
-                    elif arith_op == " - ":
-                        return l_num - r_num
-                    elif arith_op == " * ":
-                        return l_num * r_num
-                    elif arith_op == " / " and r_num != 0:
-                        return l_num / r_num
-                except (ValueError, TypeError):
-                    pass
-            return None
-
-    # Field reference — resolve relative to section path
-    if section_path:
-        full_path = f"{section_path}.{token}"
-    else:
-        full_path = token
-
-    value = doc.get(full_path)
-    if value is None:
-        # Try without section prefix
-        value = doc.get(token)
-    if value is not None:
-        return _extract_raw_value(value)
-
-    return None
 
 
 def _check_cardinality(

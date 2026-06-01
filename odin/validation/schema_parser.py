@@ -164,15 +164,16 @@ class SchemaParser:
             self._previous_header_path = ""
             if type_name not in self.types:
                 self.types[type_name] = SchemaType(name=type_name)
-        elif content.endswith("[]"):
-            # Array definition
-            array_path = content[:-2]
-            if self._current_header and self._current_header_kind == "object":
-                full_path = f"{self._current_header}.{array_path}" if self._current_header != "root" else array_path
-            else:
-                full_path = array_path
+        elif content.endswith("[]") or "[]" in content:
+            # Array definition, optionally tabular: {path[] : col1, col2}.
+            marker = content.index("[]")
+            array_path = content[:marker].strip()
+            tail = content[marker + 2:].strip()
 
-            # Actually use the simple name for header context
+            columns: Optional[List[str]] = None
+            if tail.startswith(":"):
+                columns = self._parse_field_list(tail[1:])
+
             self._current_header = array_path
             self._current_header_kind = "array"
             self._current_type_name = None
@@ -180,7 +181,7 @@ class SchemaParser:
             self._previous_header_path = array_path
             self._previous_header_type = None
 
-            array_def = SchemaArray(path=array_path)
+            array_def = SchemaArray(path=array_path, columns=columns)
 
             # Parse array constraints from after header or following lines
             if after_header:

@@ -85,3 +85,7 @@ class ValidationErrorCodes:
     V011 = "V011"  # Unknown field
     V012 = "V012"  # Circular reference
     V013 = "V013"  # Unresolved reference
+    V014 = "V014"  # Unsafe regex pattern (potential ReDoS)
+    V015 = "V015"  # Invalid regex pattern
+    V016 = "V016"  # Pattern validation timed out
+    V017 = "V017"  # Schema definition error
