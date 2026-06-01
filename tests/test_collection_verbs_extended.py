@@ -678,35 +678,31 @@ class TestSomeExtended:
 # ==========================================================================
 
 class TestFindExtended:
-    def test_first_truthy(self):
-        r = invoke("find", [None, 0, "found", 99])
-        assert r.as_string() == "found"
-
-    def test_no_match_returns_null(self):
-        r = invoke("find", [None, 0, ""])
-        assert r.is_null()
-
     def test_with_field(self):
         items = [{"n": "a", "v": 0}, {"n": "b", "v": 1}]
-        r = invoke("find", items, "v")
+        r = invoke("find", items, "v", "=", 1)
         assert r.get("n").as_string() == "b"
 
+    def test_no_match_returns_null(self):
+        items = [{"v": 0}, {"v": 1}]
+        r = invoke("find", items, "v", "=", 99)
+        assert r.is_null()
+
     def test_empty_array(self):
-        assert invoke("find", []).is_null()
+        assert invoke("find", [], "v", "=", 1).is_null()
 
-    def test_returns_first_not_all(self):
-        r = invoke("find", [0, 2, 3])
-        assert r._int_value == 2
+    def test_returns_first(self):
+        items = [{"s": "x"}, {"s": "y"}, {"s": "y"}]
+        r = invoke("find", items, "s", "=", "y")
+        assert r is items[1] or r.get("s").as_string() == "y"
 
-    def test_all_falsy(self):
-        assert invoke("find", [0, False, None]).is_null()
+    def test_single_match(self):
+        items = [{"v": 42}]
+        r = invoke("find", items, "v", "=", 42)
+        assert r.get("v")._int_value == 42
 
-    def test_single_truthy(self):
-        r = invoke("find", [42])
-        assert r._int_value == 42
-
-    def test_single_falsy(self):
-        assert invoke("find", [0]).is_null()
+    def test_single_no_match(self):
+        assert invoke("find", [{"v": 0}], "v", "=", 1).is_null()
 
 
 # ==========================================================================
@@ -715,28 +711,27 @@ class TestFindExtended:
 
 class TestFindIndexExtended:
     def test_found(self):
-        r = invoke("findIndex", [None, 0, 1])
+        items = [{"v": 0}, {"v": 0}, {"v": 1}]
+        r = invoke("findIndex", items, "v", "=", 1)
         assert r._int_value == 2
 
     def test_not_found(self):
-        r = invoke("findIndex", [None, 0])
+        items = [{"v": 0}, {"v": 0}]
+        r = invoke("findIndex", items, "v", "=", 1)
         assert r._int_value == -1
 
     def test_empty_array(self):
-        r = invoke("findIndex", [])
+        r = invoke("findIndex", [], "v", "=", 1)
         assert r._int_value == -1
 
-    def test_first_truthy(self):
-        r = invoke("findIndex", [0, 5, 10])
+    def test_first_match(self):
+        items = [{"v": 0}, {"v": 5}, {"v": 10}]
+        r = invoke("findIndex", items, "v", "=", 5)
         assert r._int_value == 1
-
-    def test_all_truthy(self):
-        r = invoke("findIndex", [1, 2, 3])
-        assert r._int_value == 0
 
     def test_with_field(self):
         items = [{"v": 0}, {"v": 10}]
-        r = invoke("findIndex", items, "v")
+        r = invoke("findIndex", items, "v", "=", 10)
         assert r._int_value == 1
 
 
@@ -810,6 +805,14 @@ class TestConcatArraysExtended:
 # zip -- extended
 # ==========================================================================
 
+def _group_items(result, key):
+    """Look up a group's items in the array-of-{key, items} groupBy result."""
+    for g in result.as_array():
+        if g.get("key").as_string() == str(key):
+            return g.get("items")
+    return None
+
+
 class TestZipExtended:
     def test_equal_length(self):
         r = invoke("zip", [1, 2], ["a", "b"])
@@ -818,11 +821,10 @@ class TestZipExtended:
         assert first[0]._int_value == 1
         assert first[1].as_string() == "a"
 
-    def test_unequal_pads_with_null(self):
+    def test_unequal_stops_at_shorter(self):
         r = invoke("zip", [1, 2, 3], ["a"])
-        assert _arr_len(r) == 3
-        assert r.as_array()[1].as_array()[1].is_null()
-        assert r.as_array()[2].as_array()[1].is_null()
+        assert _arr_len(r) == 1
+        assert r.as_array()[0].as_array()[1].as_string() == "a"
 
     def test_both_empty(self):
         assert _arr_len(invoke("zip", [], [])) == 0
@@ -840,15 +842,13 @@ class TestZipExtended:
 
     def test_first_longer(self):
         r = invoke("zip", [1, 2, 3], ["x"])
-        arr = r.as_array()
-        assert arr[0].as_array()[1].as_string() == "x"
-        assert arr[1].as_array()[1].is_null()
+        assert _arr_len(r) == 1
+        assert r.as_array()[0].as_array()[1].as_string() == "x"
 
     def test_second_longer(self):
         r = invoke("zip", [1], ["a", "b", "c"])
-        assert _arr_len(r) == 3
+        assert _arr_len(r) == 1
         assert r.as_array()[0].as_array()[0]._int_value == 1
-        assert r.as_array()[1].as_array()[0].is_null()
 
 
 # ==========================================================================
@@ -858,25 +858,28 @@ class TestZipExtended:
 class TestGroupByExtended:
     def test_empty_array(self):
         r = invoke("groupBy", [], "key")
-        assert r.is_object()
+        assert r.is_array()
+        assert _arr_len(r) == 0
 
     def test_single_group(self):
         items = [{"type": "A", "v": 1}, {"type": "A", "v": 2}]
         r = invoke("groupBy", items, "type")
-        assert r.is_object()
-        a = r.get("A")
+        assert r.is_array()
+        a = _group_items(r, "A")
         assert a is not None
         assert _arr_len(a) == 2
 
     def test_missing_field_uses_null_key(self):
         items = [{"v": 1}, {"type": "A", "v": 2}]
         r = invoke("groupBy", items, "type")
-        assert r.is_object()
+        assert r.is_array()
+        assert _arr_len(r) == 2
 
     def test_integer_field(self):
         items = [{"score": 10}, {"score": 20}, {"score": 10}]
         r = invoke("groupBy", items, "score")
-        assert r.is_object()
+        assert r.is_array()
+        assert _arr_len(_group_items(r, 10)) == 2
 
     def test_bool_field(self):
         items = [
@@ -885,21 +888,22 @@ class TestGroupByExtended:
             {"active": True, "name": "C"},
         ]
         r = invoke("groupBy", items, "active")
-        assert r.is_object()
+        assert r.is_array()
+        assert _arr_len(r) == 2
 
     def test_all_same_key(self):
         items = [{"k": "x", "v": 1}, {"k": "x", "v": 2}]
         r = invoke("groupBy", items, "k")
-        x = r.get("x")
+        x = _group_items(r, "x")
         assert x is not None
         assert _arr_len(x) == 2
 
     def test_all_unique_keys(self):
         items = [{"k": "a"}, {"k": "b"}, {"k": "c"}]
         r = invoke("groupBy", items, "k")
-        assert r.get("a") is not None
-        assert r.get("b") is not None
-        assert r.get("c") is not None
+        assert _group_items(r, "a") is not None
+        assert _group_items(r, "b") is not None
+        assert _group_items(r, "c") is not None
 
     def test_three_groups(self):
         items = [
@@ -907,9 +911,9 @@ class TestGroupByExtended:
             {"color": "red"}, {"color": "blue"},
         ]
         r = invoke("groupBy", items, "color")
-        assert _arr_len(r.get("red")) == 2
-        assert _arr_len(r.get("blue")) == 2
-        assert _arr_len(r.get("green")) == 1
+        assert _arr_len(_group_items(r, "red")) == 2
+        assert _arr_len(_group_items(r, "blue")) == 2
+        assert _arr_len(_group_items(r, "green")) == 1
 
 
 # ==========================================================================
@@ -917,50 +921,54 @@ class TestGroupByExtended:
 # ==========================================================================
 
 class TestPartitionExtended:
-    def test_all_truthy(self):
-        r = invoke("partition", [1, 2, 3])
+    def test_all_match(self):
+        items = [{"v": 1}, {"v": 1}, {"v": 1}]
+        r = invoke("partition", items, "v", "=", 1)
         parts = r.as_array()
         assert _arr_len(parts[0]) == 3
         assert _arr_len(parts[1]) == 0
 
-    def test_all_falsy(self):
-        r = invoke("partition", [0, False, None])
+    def test_none_match(self):
+        items = [{"v": 0}, {"v": 0}, {"v": 0}]
+        r = invoke("partition", items, "v", "=", 1)
         parts = r.as_array()
         assert _arr_len(parts[0]) == 0
         assert _arr_len(parts[1]) == 3
 
     def test_empty(self):
-        r = invoke("partition", [])
+        r = invoke("partition", [], "v", "=", 1)
         parts = r.as_array()
         assert _arr_len(parts[0]) == 0
         assert _arr_len(parts[1]) == 0
 
     def test_mixed(self):
-        r = invoke("partition", [1, 0, 3, None])
+        items = [{"v": 1}, {"v": 0}, {"v": 1}, {"v": 0}]
+        r = invoke("partition", items, "v", "=", 1)
         parts = r.as_array()
         assert _arr_len(parts[0]) == 2
         assert _arr_len(parts[1]) == 2
 
     def test_by_field(self):
         items = [{"v": 10}, {"v": 0}]
-        r = invoke("partition", items, "v")
+        r = invoke("partition", items, "v", ">", 5)
         parts = r.as_array()
         assert _arr_len(parts[0]) == 1
         assert _arr_len(parts[1]) == 1
 
     def test_strings(self):
-        r = invoke("partition", ["hello", "", "world"])
+        items = [{"s": "a"}, {"s": "b"}, {"s": "a"}]
+        r = invoke("partition", items, "s", "=", "a")
         parts = r.as_array()
         assert _arr_len(parts[0]) == 2
         assert _arr_len(parts[1]) == 1
 
-    def test_single_truthy(self):
-        r = invoke("partition", [1])
+    def test_single_match(self):
+        r = invoke("partition", [{"v": 1}], "v", "=", 1)
         assert _arr_len(r.as_array()[0]) == 1
         assert _arr_len(r.as_array()[1]) == 0
 
-    def test_single_falsy(self):
-        r = invoke("partition", [0])
+    def test_single_no_match(self):
+        r = invoke("partition", [{"v": 0}], "v", "=", 1)
         assert _arr_len(r.as_array()[0]) == 0
         assert _arr_len(r.as_array()[1]) == 1
 
@@ -1190,35 +1198,38 @@ class TestCompactExtended:
 
 class TestDedupeExtended:
     def test_empty_array(self):
-        assert _arr_len(invoke("dedupe", [])) == 0
+        assert _arr_len(invoke("dedupe", [], "id")) == 0
 
     def test_no_duplicates(self):
-        r = invoke("dedupe", [1, 2, 3])
+        r = invoke("dedupe", [1, 2, 3], "id")
         assert _arr_ints(r) == [1, 2, 3]
 
     def test_consecutive_duplicates(self):
-        r = invoke("dedupe", [1, 1, 2, 2, 3])
+        r = invoke("dedupe", [1, 1, 2, 2, 3], "id")
         assert _arr_ints(r) == [1, 2, 3]
 
-    def test_non_consecutive_kept(self):
-        r = invoke("dedupe", [1, 2, 1])
-        assert _arr_ints(r) == [1, 2, 1]
+    def test_non_consecutive_removed(self):
+        # Dedupe keeps the first occurrence globally, not just consecutive ones.
+        r = invoke("dedupe", [1, 2, 1], "id")
+        assert _arr_ints(r) == [1, 2]
 
     def test_all_same(self):
-        r = invoke("dedupe", [5, 5, 5, 5])
+        r = invoke("dedupe", [5, 5, 5, 5], "id")
         assert _arr_ints(r) == [5]
 
     def test_strings(self):
-        r = invoke("dedupe", ["a", "a", "b", "b", "a"])
-        assert _arr_strs(r) == ["a", "b", "a"]
+        r = invoke("dedupe", ["a", "a", "b", "b", "a"], "id")
+        assert _arr_strs(r) == ["a", "b"]
 
     def test_single_element(self):
-        r = invoke("dedupe", [42])
+        r = invoke("dedupe", [42], "id")
         assert _arr_ints(r) == [42]
 
-    def test_alternating(self):
-        r = invoke("dedupe", [1, 2, 1, 2, 1])
-        assert _arr_ints(r) == [1, 2, 1, 2, 1]
+    def test_by_field(self):
+        items = [{"id": "x", "v": 1}, {"id": "x", "v": 2}, {"id": "y", "v": 3}]
+        r = invoke("dedupe", items, "id")
+        ids = [g.get("id").as_string() for g in r.as_array()]
+        assert ids == ["x", "y"]
 
 
 # ==========================================================================
@@ -1508,38 +1519,42 @@ class TestLeadExtended:
 # rank -- extended
 # ==========================================================================
 
+def _ranks(result):
+    """Extract the _rank field from each ranked object."""
+    return [x.get("_rank").as_int() for x in result.as_array()]
+
+
 class TestRankExtended:
     def test_basic_descending(self):
         r = invoke("rank", [10, 30, 20])
-        assert _arr_ints(r) == [3, 1, 2]
+        assert _ranks(r) == [3, 1, 2]
 
     def test_tied_values(self):
         r = invoke("rank", [10, 10, 30])
-        arr = r.as_array()
-        assert arr[0]._int_value == arr[1]._int_value
+        assert _ranks(r)[0] == _ranks(r)[1]
 
     def test_single_element(self):
         r = invoke("rank", [42])
-        assert _arr_ints(r) == [1]
+        assert _ranks(r) == [1]
 
     def test_all_same_value(self):
         r = invoke("rank", [5, 5, 5])
-        assert _arr_ints(r) == [1, 1, 1]
+        assert _ranks(r) == [1, 1, 1]
 
     def test_empty(self):
-        assert _arr_len(invoke("rank", [])) == 0
+        assert invoke("rank", []).is_null()
 
     def test_already_descending(self):
         r = invoke("rank", [30, 20, 10])
-        assert _arr_ints(r) == [1, 2, 3]
+        assert _ranks(r) == [1, 2, 3]
 
     def test_already_ascending(self):
         r = invoke("rank", [10, 20, 30])
-        assert _arr_ints(r) == [3, 2, 1]
+        assert _ranks(r) == [3, 2, 1]
 
     def test_four_elements(self):
         r = invoke("rank", [40, 10, 30, 20])
-        assert _arr_ints(r) == [1, 4, 2, 3]
+        assert _ranks(r) == [1, 4, 2, 3]
 
 
 # ==========================================================================
@@ -1548,15 +1563,15 @@ class TestRankExtended:
 
 class TestFillMissingExtended:
     def test_no_nulls(self):
-        r = invoke("fillMissing", [1, 2, 3], "value", 0)
+        r = invoke("fillMissing", [1, 2, 3], 0, "value")
         assert _arr_ints(r) == [1, 2, 3]
 
     def test_all_nulls_value(self):
-        r = invoke("fillMissing", [None, None], "value", 99)
+        r = invoke("fillMissing", [None, None], 99, "value")
         assert _arr_ints(r) == [99, 99]
 
     def test_forward_strategy(self):
-        r = invoke("fillMissing", [1, None, None, 4, None], "forward")
+        r = invoke("fillMissing", [1, None, None, 4, None], 0, "forward")
         arr = r.as_array()
         assert arr[0]._int_value == 1
         assert arr[1]._int_value == 1
@@ -1565,7 +1580,7 @@ class TestFillMissingExtended:
         assert arr[4]._int_value == 4
 
     def test_backward_strategy(self):
-        r = invoke("fillMissing", [None, None, 3, None, 5], "backward")
+        r = invoke("fillMissing", [None, None, 3, None, 5], 0, "backward")
         arr = r.as_array()
         assert arr[0]._int_value == 3
         assert arr[1]._int_value == 3
@@ -1574,24 +1589,25 @@ class TestFillMissingExtended:
         assert arr[4]._int_value == 5
 
     def test_empty_array(self):
-        assert _arr_len(invoke("fillMissing", [], "value", 0)) == 0
+        assert _arr_len(invoke("fillMissing", [], 0, "value")) == 0
 
     def test_forward_leading_null(self):
-        r = invoke("fillMissing", [None, 1, None], "forward")
+        # No prior value; the fill value (None) seeds the carry.
+        r = invoke("fillMissing", [None, 1, None], None, "forward")
         arr = r.as_array()
-        assert arr[0].is_null()  # no previous value
+        assert arr[0].is_null()
         assert arr[1]._int_value == 1
         assert arr[2]._int_value == 1
 
     def test_backward_trailing_null(self):
-        r = invoke("fillMissing", [None, 1, None], "backward")
+        r = invoke("fillMissing", [None, 1, None], None, "backward")
         arr = r.as_array()
         assert arr[0]._int_value == 1
         assert arr[1]._int_value == 1
-        assert arr[2].is_null()  # no next value
+        assert arr[2].is_null()
 
     def test_value_with_string(self):
-        r = invoke("fillMissing", ["a", None, "c"], "value", "x")
+        r = invoke("fillMissing", ["a", None, "c"], "x", "value")
         assert r.as_array()[1].as_string() == "x"
 
 

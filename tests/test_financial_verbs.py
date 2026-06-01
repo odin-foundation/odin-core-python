@@ -270,11 +270,13 @@ class TestCovCorr:
 
 class TestZscore:
     def test_basic(self):
-        r = invoke("zscore", 10.0, 5.0, 2.0)
-        assert_numeric(r, 2.5)
+        # z-score of a value against an array's mean and population stddev.
+        r = invoke("zscore", 9.0, [1.0, 3.0, 5.0, 7.0, 9.0])
+        # mean=5, popStd=sqrt(8)=2.828..., (9-5)/2.828=1.414...
+        assert_numeric(r, 1.4142135623730951)
 
     def test_zero_stddev(self):
-        r = invoke("zscore", 10.0, 5.0, 0.0)
+        r = invoke("zscore", 10.0, [5.0, 5.0, 5.0])
         assert r.is_null()
 
 
@@ -282,12 +284,12 @@ class TestZscore:
 
 class TestInterpolate:
     def test_midpoint(self):
-        r = invoke("interpolate", 0.0, 10.0, 0.5)
-        assert_numeric(r, 5.0)
+        r = invoke("interpolate", 5.0, 0.0, 100.0, 10.0, 200.0)
+        assert_numeric(r, 150.0)
 
     def test_endpoints(self):
-        r = invoke("interpolate", 0.0, 10.0, 0.0)
-        assert_numeric(r, 0.0)
+        r = invoke("interpolate", 0.0, 0.0, 100.0, 10.0, 200.0)
+        assert_numeric(r, 100.0)
 
 
 # ── weightedAvg ──────────────────────────────────────────────────────

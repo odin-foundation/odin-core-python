@@ -107,8 +107,8 @@ def verb_pad_right(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_pad(args: List[DynValue], ctx: object) -> DynValue:
-    """Center padding (left-biased: less padding on left, more on right when odd)."""
-    if len(args) < 2 or args[0].is_null():
+    """Pad on the right (alias for padRight)."""
+    if len(args) < 3:
         return DynValue.of_null()
     s = coerce_str(args[0])
     width_val = coerce_num(args[1])
@@ -116,12 +116,9 @@ def verb_pad(args: List[DynValue], ctx: object) -> DynValue:
         return DynValue.of_null()
     width = int(width_val)
     pad_char = _get_pad_char(args, 2)
-    total_pad = width - len(s)
-    if total_pad <= 0:
+    if len(s) >= width:
         return DynValue.of_string(s)
-    left_pad = total_pad // 2
-    right_pad = total_pad - left_pad
-    return DynValue.of_string(pad_char * left_pad + s + pad_char * right_pad)
+    return DynValue.of_string(s + pad_char * (width - len(s)))
 
 
 def verb_truncate(args: List[DynValue], ctx: object) -> DynValue:
@@ -410,7 +407,8 @@ def verb_right_of(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_wrap(args: List[DynValue], ctx: object) -> DynValue:
-    """Word-wrap a string into an array of lines at the specified width."""
+    """Word-wrap a string to a width, joining lines with newlines."""
+    import re
     if len(args) < 2 or args[0].is_null():
         return DynValue.of_null()
     s = coerce_str(args[0])
@@ -419,25 +417,22 @@ def verb_wrap(args: List[DynValue], ctx: object) -> DynValue:
         return DynValue.of_null()
     width = int(width_val)
     if width <= 0:
-        return DynValue.of_array([DynValue.of_string(s)])
+        return DynValue.of_null()
+    if len(s) <= width:
+        return DynValue.of_string(s)
     lines: List[str] = []
-    for paragraph in s.split("\n"):
-        if not paragraph:
-            lines.append("")
-            continue
-        words = paragraph.split(" ")
-        current_line = ""
-        for word in words:
-            if not current_line:
-                current_line = word
-            elif len(current_line) + 1 + len(word) <= width:
-                current_line += " " + word
-            else:
-                lines.append(current_line)
-                current_line = word
-        if current_line or not lines:
+    current_line = ""
+    for word in re.split(r"\s+", s):
+        if not current_line:
+            current_line = word
+        elif len(current_line) + 1 + len(word) <= width:
+            current_line += " " + word
+        else:
             lines.append(current_line)
-    return DynValue.of_array([DynValue.of_string(line) for line in lines])
+            current_line = word
+    if current_line:
+        lines.append(current_line)
+    return DynValue.of_string("\n".join(lines))
 
 
 def verb_center(args: List[DynValue], ctx: object) -> DynValue:

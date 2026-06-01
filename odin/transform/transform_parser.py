@@ -257,7 +257,12 @@ def _parse_target_config(doc: OdinDocument) -> TransformTargetConfig:
                 val = doc.get(path)
                 if val is not None:
                     namespaces[ns_name] = _odin_value_to_string(val)
-            elif rest != "format":
+            elif rest == "format":
+                if not fmt:
+                    val = doc.get(path)
+                    if val is not None:
+                        fmt = _odin_value_to_string(val)
+            else:
                 val = doc.get(path)
                 if val is not None:
                     options[rest] = _odin_value_to_string(val)

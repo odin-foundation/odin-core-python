@@ -104,11 +104,9 @@ class TestFormatTimestamp:
 # ── parseTimestamp ───────────────────────────────────────────────────
 
 class TestParseTimestamp:
-    def test_iso(self):
-        r = invoke("parseTimestamp", "2024-03-15T14:30:00Z")
-        s = r.as_string()
-        assert "2024-03-15" in s
-        assert "14:30:00" in s
+    def test_pattern(self):
+        r = invoke("parseTimestamp", "2024-03-15 14:30:00", "YYYY-MM-DD HH:mm:ss")
+        assert r.as_string() == "2024-03-15T14:30:00"
 
 
 # ── addDays ──────────────────────────────────────────────────────────

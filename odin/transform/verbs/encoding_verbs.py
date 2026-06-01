@@ -83,10 +83,10 @@ def verb_json_encode(args: List[DynValue], ctx: object) -> DynValue:
     v = args[0]
     if v.is_object() or v.is_array():
         py = _dyn_to_python(v)
-        return DynValue.of_string(json.dumps(py, ensure_ascii=False))
+        return DynValue.of_string(json.dumps(py, ensure_ascii=False, separators=(",", ":")))
     # For other types, JSON-escape the string
     s = coerce_str(v)
-    return DynValue.of_string(json.dumps(s, ensure_ascii=False))
+    return DynValue.of_string(json.dumps(s, ensure_ascii=False, separators=(",", ":")))
 
 
 def verb_json_decode(args: List[DynValue], ctx: object) -> DynValue:

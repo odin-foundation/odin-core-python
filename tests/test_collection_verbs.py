@@ -309,31 +309,42 @@ class TestGroupBy:
             {"dept": "eng", "name": "Charlie"},
         ]
         r = invoke("groupBy", items, "dept")
-        assert r.is_object()
-        eng = r.get("eng")
-        assert eng is not None
-        assert len(eng.as_array()) == 2
+        # Array of {key, items} objects, insertion order
+        arr = r.as_array()
+        assert len(arr) == 2
+        assert arr[0].get("key").as_string() == "eng"
+        assert len(arr[0].get("items").as_array()) == 2
+        assert arr[1].get("key").as_string() == "sales"
 
 
 # ── partition ────────────────────────────────────────────────────────
 
 class TestPartition:
     def test_basic(self):
-        r = invoke("partition", [1, 0, 2, 0, 3])
+        items = [
+            {"status": "active"},
+            {"status": "inactive"},
+            {"status": "active"},
+        ]
+        r = invoke("partition", items, "status", "=", "active")
         arr = r.as_array()
         assert len(arr) == 2
         passing = arr[0].as_array()
         failing = arr[1].as_array()
-        assert len(passing) == 3
-        assert len(failing) == 2
+        assert len(passing) == 2
+        assert len(failing) == 1
 
 
 # ── dedupe ───────────────────────────────────────────────────────────
 
 class TestDedupe:
     def test_basic(self):
-        r = invoke("dedupe", [1, 1, 2, 2, 3, 1, 1])
-        assert _arr_ints(r) == [1, 2, 3, 1]
+        items = [
+            {"id": "a"}, {"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "a"},
+        ]
+        r = invoke("dedupe", items, "id")
+        ids = [x.get("id").as_string() for x in r.as_array()]
+        assert ids == ["a", "b", "c"]
 
 
 # ── cumsum ───────────────────────────────────────────────────────────
@@ -369,20 +380,21 @@ class TestDiff:
 class TestRank:
     def test_basic(self):
         r = invoke("rank", [30, 10, 20])
-        assert _arr_ints(r) == [1, 3, 2]
+        ranks = [x.get("_rank").as_int() for x in r.as_array()]
+        assert ranks == [1, 3, 2]
 
 
 # ── fillMissing ──────────────────────────────────────────────────────
 
 class TestFillMissing:
     def test_forward(self):
-        r = invoke("fillMissing", [1, None, None, 4], "forward")
+        r = invoke("fillMissing", [1, None, None, 4], 0, "forward")
         arr = r.as_array()
         assert arr[1]._int_value == 1
         assert arr[2]._int_value == 1
 
     def test_value(self):
-        r = invoke("fillMissing", [1, None, 3], "value", 0)
+        r = invoke("fillMissing", [1, None, 3], 0)
         arr = r.as_array()
         assert arr[1]._int_value == 0
 

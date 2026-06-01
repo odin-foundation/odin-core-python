@@ -110,7 +110,7 @@ def verb_avg(args: List[DynValue], ctx: object) -> DynValue:
             count += 1
     if count == 0:
         return DynValue.of_null()
-    return DynValue.of_float(total / count)
+    return numeric_result(total / count)
 
 
 def verb_first(args: List[DynValue], ctx: object) -> DynValue:

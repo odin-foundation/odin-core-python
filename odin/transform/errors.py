@@ -188,6 +188,17 @@ def invalid_modifier_error(
     )
 
 
+def invalid_modifier_warning(
+    modifier: str, fmt: str, field: str | None = None
+) -> TransformWarning:
+    """Create a T007 Invalid Modifier warning."""
+    return TransformWarning(
+        code=TransformErrorCodes.T007_INVALID_MODIFIER,
+        message=f"Modifier '{modifier}' is not valid for format '{fmt}'",
+        path=field,
+    )
+
+
 def accumulator_overflow_error(
     accumulator: str, value: float, field: str | None = None
 ) -> TransformError:
@@ -215,6 +226,17 @@ def position_overflow_error(
 ) -> TransformError:
     """Create a T010 Position Overflow error."""
     return TransformError(
+        code=TransformErrorCodes.T010_POSITION_OVERFLOW,
+        message=f"Field at position {position} with length {length} exceeds line width {line_width}",
+        path=field,
+    )
+
+
+def position_overflow_warning(
+    position: int, length: int, line_width: int, field: str | None = None
+) -> TransformWarning:
+    """Create a T010 Position Overflow warning."""
+    return TransformWarning(
         code=TransformErrorCodes.T010_POSITION_OVERFLOW,
         message=f"Field at position {position} with length {length} exceeds line width {line_width}",
         path=field,

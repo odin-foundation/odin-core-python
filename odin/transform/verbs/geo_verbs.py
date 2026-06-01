@@ -50,14 +50,14 @@ def verb_distance(args: List[DynValue], ctx: object) -> DynValue:
         if unit in ("miles", "mi"):
             radius = EARTH_RADIUS_MILES
         elif unit not in valid_units:
-            # T011 INCOMPATIBLE_CONVERSION: unknown unit for distance.
-            # Verbs currently cannot push errors onto the context, so we
-            # return null.  When VerbContext gains an errors list this
-            # should emit:
-            #   incompatible_conversion_error(
-            #       "distance",
-            #       f"unknown unit '{unit}' (expected 'km', 'mi', or 'miles')",
-            #   )
+            # T011: unknown distance unit.
+            errs = getattr(ctx, "errors", None)
+            if errs is not None:
+                from odin.transform.errors import incompatible_conversion_error
+                errs.append(incompatible_conversion_error(
+                    "distance",
+                    f"unknown unit '{unit}' (expected 'km', 'mi', or 'miles')",
+                ))
             return DynValue.of_null()
 
     dlat = (lat2 - lat1) * DEG_TO_RAD

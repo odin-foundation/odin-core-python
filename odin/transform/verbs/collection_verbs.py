@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 from typing import List, Optional
 
@@ -11,11 +12,32 @@ from odin.transform.verbs.helpers import (
     to_f64_for_cmp,
 )
 
+_POLLUTION_KEYS = frozenset({"__proto__", "constructor", "prototype"})
+
+
+def _sanitize_json(obj):
+    """Strip prototype-pollution keys from parsed JSON."""
+    if isinstance(obj, list):
+        return [_sanitize_json(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _sanitize_json(x) for k, x in obj.items() if k not in _POLLUTION_KEYS}
+    return obj
+
 
 def _extract_array(v: DynValue) -> List[DynValue]:
-    """Extract array from DynValue."""
+    """Extract array from DynValue, accepting a JSON-array string for chained verbs."""
     if v.is_array():
         return list(v.as_array())
+    if v.is_string():
+        s = v.as_string().strip()
+        if s.startswith("[") and s.endswith("]"):
+            try:
+                parsed = json.loads(s)
+            except ValueError:
+                return []
+            if isinstance(parsed, list):
+                from odin.transform.source_parsers.json_parser import parse_json
+                return list(parse_json(_sanitize_json(parsed)).as_array())
     return []
 
 
@@ -280,25 +302,27 @@ def verb_some(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_find(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
+    if len(args) < 4:
         return DynValue.of_null()
     arr = _extract_array(args[0])
-    field = coerce_str(args[1]) if len(args) >= 2 else ""
+    field = coerce_str(args[1])
+    op = coerce_str(args[2])
+    cmp = args[3]
     for item in arr:
-        val = _get_field(item, field) if field else item
-        if is_truthy(val):
+        if _check_filter_condition(_get_field(item, field), op, cmp):
             return item
     return DynValue.of_null()
 
 
 def verb_find_index(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
+    if len(args) < 4:
         return DynValue.of_integer(-1)
     arr = _extract_array(args[0])
-    field = coerce_str(args[1]) if len(args) >= 2 else ""
+    field = coerce_str(args[1])
+    op = coerce_str(args[2])
+    cmp = args[3]
     for i, item in enumerate(arr):
-        val = _get_field(item, field) if field else item
-        if is_truthy(val):
+        if _check_filter_condition(_get_field(item, field), op, cmp):
             return DynValue.of_integer(i)
     return DynValue.of_integer(-1)
 
@@ -324,18 +348,13 @@ def verb_concat_arrays(args: List[DynValue], ctx: object) -> DynValue:
 
 def verb_zip(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 2:
-        return DynValue.of_array([])
-    arrays = [_extract_array(a) for a in args]
-    max_len = max((len(a) for a in arrays), default=0)
+        return DynValue.of_null()
+    a = _extract_array(args[0])
+    b = _extract_array(args[1])
+    min_len = min(len(a), len(b))
     result: List[DynValue] = []
-    for i in range(max_len):
-        pair: List[DynValue] = []
-        for arr in arrays:
-            if i < len(arr):
-                pair.append(arr[i])
-            else:
-                pair.append(DynValue.of_null())
-        result.append(DynValue.of_array(pair))
+    for i in range(min_len):
+        result.append(DynValue.of_array([a[i], b[i]]))
     return DynValue.of_array(result)
 
 
@@ -347,24 +366,31 @@ def verb_group_by(args: List[DynValue], ctx: object) -> DynValue:
     if not field:
         return DynValue.of_null()
     groups: dict = {}
+    order: List[str] = []
     for item in arr:
         key = coerce_str(_get_field(item, field))
         if key not in groups:
             groups[key] = []
+            order.append(key)
         groups[key].append(item)
-    return DynValue.of_object({k: DynValue.of_array(v) for k, v in groups.items()})
+    result = [
+        DynValue.of_object({"key": DynValue.of_string(k), "items": DynValue.of_array(groups[k])})
+        for k in order
+    ]
+    return DynValue.of_array(result)
 
 
 def verb_partition(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
-        return DynValue.of_array([DynValue.of_array([]), DynValue.of_array([])])
+    if len(args) < 4:
+        return DynValue.of_null()
     arr = _extract_array(args[0])
-    field = coerce_str(args[1]) if len(args) >= 2 else ""
+    field = coerce_str(args[1])
+    op = coerce_str(args[2])
+    cmp = args[3]
     passing: List[DynValue] = []
     failing: List[DynValue] = []
     for item in arr:
-        val = _get_field(item, field) if field else item
-        if is_truthy(val):
+        if _check_filter_condition(_get_field(item, field), op, cmp):
             passing.append(item)
         else:
             failing.append(item)
@@ -451,16 +477,19 @@ def verb_compact(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_row_number(args: List[DynValue], ctx: object) -> DynValue:
-    # Requires accumulator context — increment _rowNumber
-    if hasattr(ctx, 'accumulators'):
-        accs = ctx.accumulators
-        key = "_rowNumber"
-        current = accs.get(key, DynValue.of_integer(0))
-        n = current._int_value if current.type == DynType.INTEGER else 0
-        n += 1
-        accs[key] = DynValue.of_integer(n)
-        return DynValue.of_integer(n)
-    return DynValue.of_integer(1)
+    if len(args) < 1:
+        return DynValue.of_null()
+    arr = _extract_array(args[0])
+    result: List[DynValue] = []
+    for i, item in enumerate(arr):
+        rownum = DynValue.of_integer(i + 1)
+        if item.is_object() and not item.is_array():
+            fields = {"_rowNum": rownum}
+            fields.update(item.as_object())
+            result.append(DynValue.of_object(fields))
+        else:
+            result.append(DynValue.of_object({"_rowNum": rownum, "value": item}))
+    return DynValue.of_array(result)
 
 
 def _string_to_seed(s: str) -> int:
@@ -513,15 +542,24 @@ def verb_limit(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_dedupe(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
+    if len(args) < 2:
         return DynValue.of_null()
     arr = _extract_array(args[0])
-    if not arr:
-        return DynValue.of_array([])
-    result: List[DynValue] = [arr[0]]
-    for i in range(1, len(arr)):
-        if not dyn_values_equal(arr[i], arr[i - 1]):
-            result.append(arr[i])
+    key_field = coerce_str(args[1])
+    seen: set = set()
+    result: List[DynValue] = []
+    for item in arr:
+        if item.is_object() and not item.is_array():
+            field_value = item.get(key_field)
+            if field_value is None or field_value.is_null():
+                result.append(item)
+                continue
+            key = coerce_str(field_value)
+        else:
+            key = coerce_str(item)
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
     return DynValue.of_array(result)
 
 
@@ -639,55 +677,80 @@ def verb_lead(args: List[DynValue], ctx: object) -> DynValue:
 
 def verb_rank(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
-        return DynValue.of_array([])
+        return DynValue.of_null()
     arr = _extract_array(args[0])
     if not arr:
-        return DynValue.of_array([])
-    # Get numeric values with original indices
-    indexed = []
-    for i, item in enumerate(arr):
-        n = coerce_num(item)
-        indexed.append((i, n))
-    # Sort descending by value (nulls last)
-    indexed.sort(key=lambda x: (x[1] is None, -(x[1] or 0)))
+        return DynValue.of_null()
+    field = coerce_str(args[1]) if len(args) > 1 else ""
+    direction = (coerce_str(args[2]).lower() if len(args) > 2 else "desc")
+
+    def value_of(item: DynValue) -> DynValue:
+        if field and item.is_object():
+            return _get_field(item, field)
+        return item
+
+    indexed = [(i, value_of(item)) for i, item in enumerate(arr)]
+    mult = 1 if direction == "asc" else -1
+    import functools
+    sorted_idx = sorted(
+        indexed,
+        key=functools.cmp_to_key(lambda a, b: mult * _compare_values(a[1], b[1])),
+    )
     ranks = [0] * len(arr)
     current_rank = 1
-    for j, (orig_idx, val) in enumerate(indexed):
-        if j > 0:
-            prev_val = indexed[j - 1][1]
-            if val != prev_val:
-                current_rank = j + 1
+    for j, (orig_idx, val) in enumerate(sorted_idx):
+        if j > 0 and not dyn_values_equal(val, sorted_idx[j - 1][1]):
+            current_rank = j + 1
         ranks[orig_idx] = current_rank
-    return DynValue.of_array([DynValue.of_integer(r) for r in ranks])
+
+    result: List[DynValue] = []
+    for i, item in enumerate(arr):
+        rank_val = DynValue.of_integer(ranks[i])
+        if item.is_object() and not item.is_array():
+            fields = {"_rank": rank_val}
+            fields.update(item.as_object())
+            result.append(DynValue.of_object(fields))
+        else:
+            result.append(DynValue.of_object({"_rank": rank_val, "value": item}))
+    return DynValue.of_array(result)
 
 
 def verb_fill_missing(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 2:
-        return DynValue.of_array([])
+    if len(args) < 1:
+        return DynValue.of_null()
     arr = _extract_array(args[0])
-    strategy = coerce_str(args[1])
-    fill_value = args[2] if len(args) >= 3 else DynValue.of_null()
+    fill_value = args[1] if len(args) >= 2 else DynValue.of_null()
+    strategy = coerce_str(args[2]).lower() if len(args) >= 3 else "value"
 
     result = list(arr)
     if strategy == "forward":
-        last_valid = DynValue.of_null()
+        last_valid = fill_value
         for i in range(len(result)):
             if result[i].is_null():
                 result[i] = last_valid
             else:
                 last_valid = result[i]
     elif strategy == "backward":
-        next_valid = DynValue.of_null()
+        next_valid = fill_value
         for i in range(len(result) - 1, -1, -1):
             if result[i].is_null():
                 result[i] = next_valid
             else:
                 next_valid = result[i]
+    elif strategy == "mean":
+        total = 0.0
+        count = 0
+        for item in result:
+            if not item.is_null():
+                n = coerce_num(item)
+                if n is not None:
+                    total += n
+                    count += 1
+        mean = total / count if count else 0.0
+        mean_val = DynValue.of_float(mean)
+        result = [mean_val if item.is_null() else item for item in result]
     else:
-        # Fill with value
-        for i in range(len(result)):
-            if result[i].is_null():
-                result[i] = fill_value
+        result = [fill_value if item.is_null() else item for item in result]
     return DynValue.of_array(result)
 
 

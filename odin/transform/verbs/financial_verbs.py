@@ -32,18 +32,30 @@ def _extract_doubles(v: DynValue) -> List[float]:
     return result
 
 
+def _fsum(values) -> float:
+    """Left-fold summation from 0.0 (sequential accumulation)."""
+    total = 0.0
+    for v in values:
+        total += v
+    return total
+
+
+def _mean(values: List[float]) -> float:
+    return _fsum(values) / len(values)
+
+
 def _population_variance(values: List[float]) -> Optional[float]:
     if not values:
         return None
-    mean = sum(values) / len(values)
-    return sum((x - mean) ** 2 for x in values) / len(values)
+    mean = _mean(values)
+    return _fsum((x - mean) ** 2 for x in values) / len(values)
 
 
 def _sample_variance(values: List[float]) -> Optional[float]:
     if len(values) < 2:
         return None
-    mean = sum(values) / len(values)
-    return sum((x - mean) ** 2 for x in values) / (len(values) - 1)
+    mean = _mean(values)
+    return _fsum((x - mean) ** 2 for x in values) / (len(values) - 1)
 
 
 # ── Time Value of Money ─────────────────────────────────────────────
@@ -380,26 +392,35 @@ def verb_correlation(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_zscore(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 3:
+    """Z-score of a value relative to an array's mean and population stddev."""
+    if len(args) < 2:
         return DynValue.of_null()
     value = _to_double(args[0])
-    mean = _to_double(args[1])
-    stddev = _to_double(args[2])
-    if value is None or mean is None or stddev is None or stddev == 0:
+    values = _extract_doubles(args[1])
+    if value is None or not values:
+        return DynValue.of_null()
+    mean = _mean(values)
+    var = _fsum((x - mean) ** 2 for x in values) / len(values)
+    stddev = math.sqrt(var)
+    if stddev == 0:
         return DynValue.of_null()
     return _safe_result((value - mean) / stddev)
 
 
 def verb_interpolate(args: List[DynValue], ctx: object) -> DynValue:
-    """Linear interpolation: a + (b - a) * t"""
-    if len(args) < 3:
+    """Linear interpolation between (x1,y1) and (x2,y2) at x."""
+    if len(args) < 5:
         return DynValue.of_null()
-    a = _to_double(args[0])
-    b = _to_double(args[1])
-    t = _to_double(args[2])
-    if a is None or b is None or t is None:
+    x = _to_double(args[0])
+    x1 = _to_double(args[1])
+    y1 = _to_double(args[2])
+    x2 = _to_double(args[3])
+    y2 = _to_double(args[4])
+    if None in (x, x1, y1, x2, y2):
         return DynValue.of_null()
-    return _safe_result(a + (b - a) * t)
+    if x2 == x1:
+        return _safe_result(y1)
+    return _safe_result(y1 + (x - x1) * (y2 - y1) / (x2 - x1))
 
 
 def verb_weighted_avg(args: List[DynValue], ctx: object) -> DynValue:

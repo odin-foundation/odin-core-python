@@ -133,6 +133,7 @@ class OdinParser:
         tabular_columns: Optional[List[str]] = None
         tabular_base: Optional[str] = None
         tabular_row_index = 0
+        header_before_tabular: Optional[str] = None
 
         last_was_newline = False
 
@@ -163,6 +164,7 @@ class OdinParser:
 
             # Header
             if tt == TokenType.HEADER_OPEN:
+                prev_header = current_header
                 result = self._parse_header(tokens, pos, end, current_header, last_absolute_header)
                 pos = result[0]
                 current_header = result[1]
@@ -179,6 +181,7 @@ class OdinParser:
                     tabular_columns = tab_cols
                     tabular_base = tab_base
                     tabular_row_index = 0
+                    header_before_tabular = prev_header
                 else:
                     tabular_columns = None
                     tabular_base = None
@@ -192,6 +195,15 @@ class OdinParser:
                         assigned_paths.add(full_path)
                         builder.set(full_path, OdinString(value=dval))
                     self._pending_header_directive = None
+
+                # Section-as-target assignment: {.path} = value assigns to the header path
+                if pos < end and tokens[pos].type == TokenType.EQUALS:
+                    tabular_columns = None
+                    tabular_base = None
+                    pos = self._parse_assignment(
+                        tokens, pos, end, current_header, in_metadata,
+                        builder, assigned_paths, array_indices, max_depth,
+                    )
 
                 continue
 
@@ -270,7 +282,11 @@ class OdinParser:
             if tabular_columns is not None and tt != TokenType.HEADER_OPEN:
                 if self._is_assignment_start(tokens, pos, end):
                     # Assignment line in tabular context — exit tabular mode
-                    # (e.g., _loop = "@items" after {items[] : col1, col2})
+                    # (e.g., _loop = "@items" after {items[] : col1, col2}).
+                    # Restore the header active before the tabular block once rows
+                    # have been read, so trailing fields land at the right path.
+                    if tabular_row_index > 0:
+                        current_header = header_before_tabular
                     tabular_columns = None
                     tabular_base = None
                 else:

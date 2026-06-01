@@ -728,39 +728,35 @@ class TestCorrelationExtended:
 # ══════════════════════════════════════════════════════════════════════
 
 class TestZscoreExtended:
-    @pytest.mark.parametrize("value,mean,stddev,expected", [
-        (10.0, 5.0, 2.0, 2.5),
-        (5.0, 5.0, 2.0, 0.0),
-        (0.0, 5.0, 2.0, -2.5),
-        (100.0, 50.0, 10.0, 5.0),
-        (30.0, 50.0, 10.0, -2.0),
+    # z-score of a value against the mean and population stddev of an array.
+    @pytest.mark.parametrize("value,array,expected", [
+        (9.0, [1.0, 3.0, 5.0, 7.0, 9.0], 1.4142135623730951),
+        (5.0, [1.0, 3.0, 5.0, 7.0, 9.0], 0.0),
+        (1.0, [1.0, 3.0, 5.0, 7.0, 9.0], -1.4142135623730951),
     ])
-    def test_various(self, value, mean, stddev, expected):
-        r = invoke("zscore", value, mean, stddev)
+    def test_various(self, value, array, expected):
+        r = invoke("zscore", value, array)
         assert_numeric(r, expected)
 
     def test_zero_stddev_returns_null(self):
-        r = invoke("zscore", 10.0, 5.0, 0.0)
+        r = invoke("zscore", 10.0, [5.0, 5.0, 5.0])
         assert r.is_null()
 
     def test_null_value(self):
-        r = invoke("zscore", None, 5.0, 2.0)
+        r = invoke("zscore", None, [1.0, 2.0, 3.0])
         assert r.is_null()
 
-    def test_null_mean(self):
-        r = invoke("zscore", 10.0, None, 2.0)
-        assert r.is_null()
-
-    def test_null_stddev(self):
-        r = invoke("zscore", 10.0, 5.0, None)
+    def test_empty_array(self):
+        r = invoke("zscore", 10.0, [])
         assert r.is_null()
 
 
 # ══════════════════════════════════════════════════════════════════════
-# interpolate: a + (b - a) * t
+# interpolate: linear interpolation between (x1,y1) and (x2,y2) at x
 # ══════════════════════════════════════════════════════════════════════
 
 class TestInterpolateExtended:
+    # Mapped as interpolation between (0, a) and (1, b) at x=t.
     @pytest.mark.parametrize("a,b,t,expected", [
         (0.0, 10.0, 0.0, 0.0),
         (0.0, 10.0, 0.5, 5.0),
@@ -773,30 +769,29 @@ class TestInterpolateExtended:
         (100.0, 200.0, 1.0, 200.0),
     ])
     def test_various(self, a, b, t, expected):
-        r = invoke("interpolate", a, b, t)
+        r = invoke("interpolate", t, 0.0, a, 1.0, b)
         assert_numeric(r, expected)
 
     def test_extrapolation_above(self):
-        # t > 1 extrapolates
-        r = invoke("interpolate", 0.0, 10.0, 2.0)
+        r = invoke("interpolate", 2.0, 0.0, 0.0, 1.0, 10.0)
         assert_numeric(r, 20.0)
 
     def test_extrapolation_below(self):
-        # t < 0 extrapolates
-        r = invoke("interpolate", 0.0, 10.0, -1.0)
+        r = invoke("interpolate", -1.0, 0.0, 0.0, 1.0, 10.0)
         assert_numeric(r, -10.0)
 
-    def test_null_a(self):
-        r = invoke("interpolate", None, 10.0, 0.5)
+    def test_null_x(self):
+        r = invoke("interpolate", None, 0.0, 0.0, 1.0, 10.0)
         assert r.is_null()
 
-    def test_null_b(self):
-        r = invoke("interpolate", 0.0, None, 0.5)
+    def test_null_y1(self):
+        r = invoke("interpolate", 0.5, 0.0, None, 1.0, 10.0)
         assert r.is_null()
 
-    def test_null_t(self):
-        r = invoke("interpolate", 0.0, 10.0, None)
-        assert r.is_null()
+    def test_equal_x(self):
+        # x2 == x1 returns y1 to avoid division by zero.
+        r = invoke("interpolate", 0.5, 1.0, 7.0, 1.0, 9.0)
+        assert_numeric(r, 7.0)
 
 
 # ══════════════════════════════════════════════════════════════════════

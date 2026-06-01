@@ -257,30 +257,27 @@ class TestFormatTimestampExtended:
 
 class TestParseTimestampExtended:
     def test_iso_with_z(self):
-        r = invoke("parseTimestamp", "2024-03-15T14:30:00Z")
-        s = r.as_string()
-        assert "2024-03-15" in s
-        assert "14:30:00" in s
+        r = invoke("parseTimestamp", "2024-03-15 14:30:00", "YYYY-MM-DD HH:mm:ss")
+        assert r.as_string() == "2024-03-15T14:30:00"
 
-    def test_iso_with_millis(self):
-        r = invoke("parseTimestamp", "2024-03-15T14:30:00.000Z")
-        s = r.as_string()
-        assert "2024-03-15" in s
+    def test_pattern_date_and_time(self):
+        r = invoke("parseTimestamp", "2024-03-15 09:05:07", "YYYY-MM-DD HH:mm:ss")
+        assert r.as_string() == "2024-03-15T09:05:07"
 
     def test_null_input(self):
-        r = invoke("parseTimestamp", None)
+        r = invoke("parseTimestamp", None, "YYYY-MM-DD")
         assert r.is_null()
 
     def test_invalid_input(self):
-        r = invoke("parseTimestamp", "not-a-timestamp")
+        r = invoke("parseTimestamp", "not-a-timestamp", "YYYY-MM-DD HH:mm:ss")
         assert r.is_null()
 
     def test_empty_string(self):
-        r = invoke("parseTimestamp", "")
+        r = invoke("parseTimestamp", "", "YYYY-MM-DD")
         assert r.is_null()
 
-    def test_date_only_string(self):
-        r = invoke("parseTimestamp", "2024-03-15")
+    def test_date_only_pattern(self):
+        r = invoke("parseTimestamp", "2024-03-15", "YYYY-MM-DD")
         s = r.as_string()
         assert "2024-03-15" in s
 

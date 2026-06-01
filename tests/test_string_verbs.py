@@ -122,8 +122,9 @@ def test_pad_right_basic():
 def test_pad_right_already_wide():
     assert invoke("padRight", "hello", 3, "*").as_string() == "hello"
 
-def test_pad_center():
-    assert invoke("pad", "hi", 6, "*").as_string() == "**hi**"
+def test_pad_right_alias():
+    # %pad pads on the right (alias for padRight).
+    assert invoke("pad", "hi", 6, "*").as_string() == "hi****"
 
 def test_pad_null():
     assert invoke("padLeft", None).is_null()
@@ -347,12 +348,14 @@ def test_right_of_not_found():
 # ── wrap / center ─────────────────────────────────────────────────────────────
 
 def test_wrap_basic():
+    # Short text within width is returned unchanged.
     r = invoke("wrap", "hello", 10)
-    assert r.is_array()
+    assert r.as_string() == "hello"
 
 def test_wrap_default_suffix():
+    # Long text wraps onto newline-separated lines.
     r = invoke("wrap", "hello world this is a long string", 10)
-    assert r.is_array()
+    assert "\n" in r.as_string()
 
 def test_wrap_null():
     assert invoke("wrap", None, "(").is_null()

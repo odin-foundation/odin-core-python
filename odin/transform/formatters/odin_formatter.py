@@ -41,11 +41,20 @@ def format_odin(
     root_scalars: List[Tuple[str, DynValue]] = []
     ordered_entries: List[Tuple[str, DynValue, str]] = []  # (key, val, type)
 
+    top_groups = sum(
+        1 for k, v in obj.items() if k != "$" and (v.is_object() or v.is_array())
+    )
+
     for key, val in obj.items():
         if key == "$":
             continue
         if val.is_object():
-            if _should_be_section(val):
+            # A single-scalar section alongside other top-level groups collapses to
+            # a dotted root path emitted ahead of the section blocks.
+            if top_groups > 1 and _single_scalar_section_entry(val) is not None:
+                sub_key, sub_val = _single_scalar_section_entry(val)
+                root_scalars.append((f"{key}.{sub_key}", sub_val))
+            elif _should_be_section(val):
                 ordered_entries.append((key, val, "section"))
             else:
                 # Flatten to root-level dotted paths
@@ -66,12 +75,49 @@ def format_odin(
     # Step 4: Write sections and arrays in original order
     for key, val, entry_type in ordered_entries:
         if entry_type == "section":
+            single = _single_scalar_array_entry(val)
+            if single is not None:
+                sub_key, arr_val = single
+                _write_tabular_array(arr_val, lines, f"{key}.{sub_key}", modifiers)
+                continue
             lines.append(f"{{{key}}}")
             _write_section_body(key, val, lines, depth=0, modifiers=modifiers)
         elif entry_type == "array":
-            _write_tabular_array(val, lines, key, modifiers)
+            _write_tabular_array(val, lines, key, modifiers, full_path=key)
 
     return "\n".join(lines) + "\n" if lines else ""
+
+
+def _single_scalar_section_entry(obj: DynValue):
+    """Return (key, value) when a section holds exactly one non-dotted scalar."""
+    if not obj.is_object():
+        return None
+    entries = obj.as_object()
+    if len(entries) != 1:
+        return None
+    key, val = next(iter(entries.items()))
+    if "." in key or val.is_object() or val.is_array():
+        return None
+    return key, val
+
+
+def _single_scalar_array_entry(obj: DynValue):
+    """Return (key, array) when a section holds exactly one single-element scalar array."""
+    if not obj.is_object():
+        return None
+    entries = obj.as_object()
+    if len(entries) != 1:
+        return None
+    key, val = next(iter(entries.items()))
+    if not val.is_array():
+        return None
+    items = val.as_array()
+    if len(items) != 1:
+        return None
+    only = items[0]
+    if only.is_object() or only.is_array():
+        return None
+    return key, val
 
 
 def _should_be_section(obj: DynValue) -> bool:
@@ -192,7 +238,7 @@ def _write_section_body(
 
     # Write arrays (relative notation)
     for k, v in arrays:
-        _write_tabular_array(v, lines, f".{k}", modifiers)
+        _write_tabular_array(v, lines, f".{k}", modifiers, full_path=f"{full_path}.{k}")
 
     # Write child objects
     for k, v in objects:
@@ -287,7 +333,7 @@ def _write_section_with_dotted_keys(
 
     # Write arrays
     for item_type, key, val in array_items:
-        _write_tabular_array(val, lines, f".{key}", modifiers)
+        _write_tabular_array(val, lines, f".{key}", modifiers, full_path=f"{full_path}.{key}")
 
     # Write object sections and groups
     for item_type, key, val in section_items:
@@ -359,6 +405,7 @@ def _write_tabular_array(
     lines: List[str],
     prefix: str,
     modifiers: Optional[Dict[str, object]] = None,
+    full_path: Optional[str] = None,
 ):
     """Write an array using ODIN tabular notation."""
     items = value.as_array()
@@ -368,10 +415,25 @@ def _write_tabular_array(
         lines.append("~")
         return
 
-    # Detect if all items are objects (tabular array) or scalars
+    # Detect item shapes
     all_objects = all(item.is_object() for item in items)
+    all_arrays = all(item.is_array() for item in items)
+
+    if all_arrays:
+        _write_array_of_arrays(items, lines, prefix, modifiers)
+        return
 
     if all_objects:
+        # Records containing nested objects/arrays cannot be tabular → indexed sections.
+        if full_path and any(
+            any(fv.is_object() or fv.is_array() for fv in item.as_object().values())
+            for item in items
+        ):
+            for i, item in enumerate(items):
+                lines.append(f"{{{full_path}[{i}]}}")
+                _write_section_body(f"{full_path}[{i}]", item, lines, depth=1, modifiers=modifiers)
+            return
+
         # Collect column names from all rows (preserve order from first row)
         columns: List[str] = []
         seen: set = set()
@@ -406,6 +468,71 @@ def _write_tabular_array(
         lines.append(f"{{{prefix}[] : ~}}")
         for item in items:
             lines.append(_format_value(item, modifiers, ""))
+
+
+def _write_array_of_arrays(
+    items: List[DynValue],
+    lines: List[str],
+    prefix: str,
+    modifiers: Optional[Dict[str, object]] = None,
+):
+    """Write an array whose elements are themselves arrays as a positional table.
+
+    Scalar sub-arrays produce indexed columns ([0], [1], …); sub-arrays of records
+    produce per-position field columns ([0].field). Ragged rows leave empty cells.
+    """
+    width = max((len(item.as_array()) for item in items), default=0)
+
+    # Determine which positions hold records (objects) across all rows.
+    record_fields: List[List[str]] = []
+    for pos in range(width):
+        fields: List[str] = []
+        seen: set = set()
+        is_record = False
+        for item in items:
+            sub = item.as_array()
+            if pos < len(sub) and sub[pos].is_object():
+                is_record = True
+                for k in sub[pos].as_object().keys():
+                    if k not in seen:
+                        fields.append(k)
+                        seen.add(k)
+        record_fields.append(fields if is_record else [])
+
+    columns: List[str] = []
+    for pos in range(width):
+        if record_fields[pos]:
+            for f in record_fields[pos]:
+                columns.append(f"[{pos}].{f}")
+        else:
+            columns.append(f"[{pos}]")
+
+    display_columns = _shorthand_column_names(columns)
+    lines.append(f"{{{prefix}[] : {', '.join(display_columns)}}}")
+
+    for item in items:
+        sub = item.as_array()
+        row_vals: List[str] = []
+        for pos in range(width):
+            cell = sub[pos] if pos < len(sub) else None
+            if record_fields[pos]:
+                rec = cell.as_object() if (cell is not None and cell.is_object()) else {}
+                for f in record_fields[pos]:
+                    fv = rec.get(f)
+                    if fv is None:
+                        row_vals.append("")
+                    elif fv.is_null():
+                        row_vals.append("~")
+                    else:
+                        row_vals.append(_format_value(fv, modifiers, ""))
+            else:
+                if cell is None:
+                    row_vals.append("")
+                elif cell.is_null():
+                    row_vals.append("~")
+                else:
+                    row_vals.append(_format_value(cell, modifiers, ""))
+        lines.append(", ".join(row_vals))
 
 
 def _format_value(

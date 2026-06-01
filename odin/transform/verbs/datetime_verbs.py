@@ -148,15 +148,21 @@ def verb_format_timestamp(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_parse_timestamp(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
+    if len(args) < 2:
         return DynValue.of_null()
     s = coerce_str(args[0])
+    pattern = coerce_str(args[1])
     if not s:
         return DynValue.of_null()
-    dt = _parse_dt(s)
+    dt = _parse_with_pattern(s, pattern)
+    if dt is None:
+        dt = _parse_dt(s)
     if dt is None:
         return DynValue.of_null()
-    return DynValue.of_string(format_iso_timestamp(dt))
+    return DynValue.of_string(
+        f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}T"
+        f"{dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}"
+    )
 
 
 def verb_add_days(args: List[DynValue], ctx: object) -> DynValue:

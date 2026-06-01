@@ -40,6 +40,9 @@ from odin.transform.errors import (
     source_missing_error,
     loop_source_not_array_error,
     invalid_output_format_error,
+    invalid_verb_args_error,
+    invalid_modifier_warning,
+    position_overflow_warning,
     CodedTransformError,
 )
 from odin.transform.verbs.collection_verbs import _check_filter_condition
@@ -60,6 +63,93 @@ _INTERP_RE = _re.compile(r"\\?\$\{([^}]+)\}")
 
 # Verbs that require lazy evaluation of their branch arguments
 _LAZY_EVAL_VERBS = frozenset({"ifElse", "ternary", "switch"})
+
+# Positional argument types for strict-type validation (subset; "number" accepts
+# number/integer/currency). Verbs absent here skip strict validation.
+_VERB_ARG_TYPES: Dict[str, List[str]] = {
+    "abs": ["number"], "round": ["number", "integer"], "floor": ["number"],
+    "ceil": ["number"], "trunc": ["number"], "sign": ["number"],
+    "negate": ["number"], "sqrt": ["number"], "exp": ["number"],
+    "add": ["number", "number"], "subtract": ["number", "number"],
+    "multiply": ["number", "number"], "divide": ["number", "number"],
+    "mod": ["number", "number"], "pow": ["number", "number"],
+    "log": ["number", "number"], "clamp": ["number", "number", "number"],
+}
+
+
+def _dyn_type_name(v: DynValue) -> str:
+    """Map a DynValue to a transform type name for strict validation."""
+    if v.is_null():
+        return "null"
+    if v.is_integer():
+        return "integer"
+    if v.type in (DynType.CURRENCY, DynType.CURRENCY_RAW):
+        return "currency"
+    if v.is_number():
+        return "number"
+    if v.is_bool():
+        return "boolean"
+    if v.is_array():
+        return "array"
+    if v.is_object():
+        return "object"
+    if v.is_string():
+        return "string"
+    return "any"
+
+
+def _type_matches(actual: str, expected: str) -> bool:
+    if expected == "any" or actual == "null":
+        return True
+    if expected == "number":
+        return actual in ("number", "integer", "currency")
+    return actual == expected
+
+
+# Modifiers valid only for specific target formats.
+_FORMAT_SPECIFIC_MODIFIERS: Dict[str, frozenset] = {
+    "pos": frozenset({"fixed-width", "fwf"}),
+    "len": frozenset({"fixed-width", "fwf"}),
+    "leftPad": frozenset({"fixed-width", "fwf"}),
+    "rightPad": frozenset({"fixed-width", "fwf"}),
+    "truncate": frozenset({"fixed-width", "fwf"}),
+    "element": frozenset({"xml"}),
+    "attr": frozenset({"xml"}),
+    "ns": frozenset({"xml"}),
+    "cdata": frozenset({"xml"}),
+    "omitEmpty": frozenset({"xml", "json"}),
+    "raw": frozenset({"json"}),
+}
+
+
+def _directive_int(directives, name: str):
+    """Return the integer value of a named directive, or None."""
+    for d in directives:
+        if d.name == name and d.value is not None:
+            try:
+                return int(str(d.value).strip())
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
+def _is_modifier_compatible(modifier: str, fmt: str) -> bool:
+    allowed = _FORMAT_SPECIFIC_MODIFIERS.get(modifier)
+    if allowed is None:
+        return True
+    return fmt in allowed
+
+
+def _validate_verb_arg_types(verb: str, args: List[DynValue]):
+    """Return a T002 error when a built-in verb receives an arg of the wrong type."""
+    sig = _VERB_ARG_TYPES.get(verb)
+    if sig is None:
+        return None
+    for i, arg in enumerate(args):
+        expected = sig[i] if i < len(sig) else "any"
+        if not _type_matches(_dyn_type_name(arg), expected):
+            return invalid_verb_args_error(verb, expected, len(args))
+    return None
 
 
 class VerbContext:
@@ -89,8 +179,8 @@ class _ExecContext:
         "source", "constants", "accumulators", "tables",
         "loop_vars", "warnings", "errors",
         "enforce_confidential", "global_output", "field_modifiers",
-        "source_format", "verb_registry", "loop_depth",
-        "on_validation", "on_error", "on_missing",
+        "source_format", "target_format", "verb_registry", "loop_depth",
+        "on_validation", "on_error", "on_missing", "strict_types", "line_width",
     )
 
     def __init__(self) -> None:
@@ -105,11 +195,14 @@ class _ExecContext:
         self.global_output: DynValue = DynValue.of_object({})
         self.field_modifiers: Dict[str, OdinModifiers] = {}
         self.source_format: str = ""
+        self.target_format: str = ""
         self.verb_registry: Optional[VerbRegistry] = None
         self.loop_depth: int = 0
         self.on_validation: str = "fail"
         self.on_error: str = "fail"
         self.on_missing: Optional[str] = None
+        self.strict_types: bool = False
+        self.line_width: Optional[int] = None
 
 
 class TransformEngine:
@@ -242,9 +335,17 @@ class TransformEngine:
         ctx.verb_registry = self.registry
         ctx.enforce_confidential = transform.enforce_confidential
         ctx.source_format = (transform.source.format if transform.source else "")
+        ctx.target_format = transform.target.format if transform.target else ""
         ctx.on_validation = transform.target.options.get("onValidation", "fail")
         ctx.on_error = transform.target.options.get("onError", "fail")
         ctx.on_missing = transform.target.options.get("onMissing")
+        ctx.strict_types = transform.strict_types
+        lw = transform.target.options.get("lineWidth") if transform.target else None
+        if lw:
+            try:
+                ctx.line_width = int(lw)
+            except (ValueError, TypeError):
+                ctx.line_width = None
 
         # Init constants
         for name, value in transform.constants.items():
@@ -859,6 +960,20 @@ class TransformEngine:
                     if _evaluate_condition(d.value, cond_source, ctx):
                         return output
 
+            # T007: warn on modifiers that are not valid for the target format.
+            for d in mapping.directives:
+                if not _is_modifier_compatible(d.name, ctx.target_format):
+                    ctx.warnings.append(
+                        invalid_modifier_warning(d.name, ctx.target_format, mapping.target))
+
+            # T010: fixed-width field whose pos + len exceeds the configured lineWidth.
+            if ctx.target_format in ("fixed-width", "fixed_width", "fwf") and ctx.line_width:
+                pos = _directive_int(mapping.directives, "pos")
+                length = _directive_int(mapping.directives, "len")
+                if pos is not None and length is not None and pos + length > ctx.line_width:
+                    ctx.warnings.append(
+                        position_overflow_warning(pos, length, ctx.line_width, mapping.target))
+
             # For verb expressions with extraction directives (pos/len/field),
             # pre-extract from the verb's reference argument before calling the verb
             expr = mapping.expression
@@ -1180,6 +1295,12 @@ class TransformEngine:
         args: List[DynValue] = []
         for arg in call.args:
             args.append(self._evaluate_verb_arg(arg, ctx, current_source, current_output))
+
+        # Strict type validation (T002) when enabled.
+        if ctx.strict_types and not call.is_custom:
+            type_error = _validate_verb_arg_types(call.verb, args)
+            if type_error is not None:
+                raise CodedTransformError(type_error)
 
         # Build verb context
         verb_ctx = self._make_verb_context(ctx)

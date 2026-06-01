@@ -370,17 +370,16 @@ class TestPadCenterExtended:
     def test_empty_string(self):
         assert invoke("pad", "", 4, "x").as_string() == "xxxx"
 
-    def test_even_padding(self):
-        assert invoke("pad", "hi", 6, "-").as_string() == "--hi--"
+    def test_right_padding(self):
+        assert invoke("pad", "hi", 6, "-").as_string() == "hi----"
 
     def test_odd_width(self):
         result = invoke("pad", "hi", 5, "*").as_string()
-        assert len(result) == 5
-        assert "hi" in result
+        assert result == "hi***"
 
     def test_default_pad_char(self):
-        result = invoke("pad", "hi", 6).as_string()
-        assert len(result) == 6
+        # %pad requires an explicit pad character; fewer args yields null.
+        assert invoke("pad", "hi", 6).is_null()
 
     @pytest.mark.parametrize("text,width,char,expected_len", [
         ("hi", 6, "*", 6),
@@ -1343,28 +1342,24 @@ class TestSoundexExtended:
 class TestWrapExtended:
     def test_short_text(self):
         r = invoke("wrap", "hello", 10)
-        assert r.is_array()
-        assert len(r.as_array()) == 1
-        assert r.as_array()[0].as_string() == "hello"
+        assert r.as_string() == "hello"
 
     def test_word_wrap(self):
         r = invoke("wrap", "hello world test case", 11)
-        assert r.is_array()
-        arr = r.as_array()
-        assert len(arr) >= 2
+        lines = r.as_string().split("\n")
+        assert len(lines) >= 2
 
     def test_null_input(self):
         assert invoke("wrap", None, 10).is_null()
 
     def test_empty_string(self):
         r = invoke("wrap", "", 10)
-        assert r.is_array()
+        assert r.as_string() == ""
 
     def test_single_long_word(self):
         r = invoke("wrap", "superlongword", 5)
-        assert r.is_array()
-        # Single word longer than width stays as one line
-        assert len(r.as_array()) >= 1
+        # A single word longer than the width stays on one line.
+        assert r.as_string() == "superlongword"
 
 
 # =============================================================================
