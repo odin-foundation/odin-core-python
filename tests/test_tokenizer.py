@@ -230,13 +230,13 @@ class TestStrings:
 
     def test_multi_line_string(self):
         tokens = tok('x = """line1\nline2\nline3"""')
-        s = find_token(tokens, TokenType.STRING_QUOTED)
+        s = find_token(tokens, TokenType.STRING_MULTILINE)
         assert "line1" in s.value
         assert "line2" in s.value
 
     def test_multi_line_string_content(self):
         tokens = tok('x = """hello\nworld"""')
-        s = find_token(tokens, TokenType.STRING_QUOTED)
+        s = find_token(tokens, TokenType.STRING_MULTILINE)
         assert s.value == "hello\nworld"
 
 

@@ -153,6 +153,14 @@ class LookupTable:
 
 
 @dataclass
+class LoopSpec:
+    """One `:loop path :as alias` declaration on a segment."""
+
+    path: str = ""
+    alias: Optional[str] = None
+
+
+@dataclass
 class TransformSegment:
     name: str = ""
     path: str = ""
@@ -167,6 +175,9 @@ class TransformSegment:
     condition_expr: Optional[FieldExpression] = None
     branch: Optional[str] = None  # 'if' | 'elif' | 'else' for conditional chains
     counter_name: Optional[str] = None  # loop counter declared via :counter
+    loops: List[LoopSpec] = field(default_factory=list)  # nested :loop directives
+    literal_body: Optional[str] = None  # body of a :literal segment
+    is_literal: bool = False  # segment renders a literal text block
 
 
 # ── Source / Target Config ─────────────────────────────────────────────────────

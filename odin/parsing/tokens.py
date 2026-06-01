@@ -52,6 +52,7 @@ class TokenType(IntEnum):
     # Values
     STRING_BARE = auto()
     STRING_QUOTED = auto()
+    STRING_MULTILINE = auto()
     NUMBER = auto()
     BOOLEAN = auto()
     DATE = auto()

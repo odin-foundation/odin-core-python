@@ -19,6 +19,7 @@ from odin.transform.types import (
     TransformSourceConfig,
     TransformTargetConfig,
     TransformSegment,
+    LoopSpec,
     FieldMapping,
     FieldExpression,
     CopyExpression,
@@ -554,6 +555,7 @@ def _build_segment(
     source_path = None
     from_path = None
     mappings = []
+    loops: List[LoopSpec] = []
 
     for entry in top_assignments:
         if len(entry) == 4:
@@ -593,12 +595,29 @@ def _build_segment(
             seg.segment_discriminator = Discriminator(path="", value=disc_value)
             continue
 
-        # Handle _loop directive (string assignment)
-        if field == "_loop":
+        # Handle _loop directive (string assignment). Repeated loops are stored as
+        # _loop, _loop2, _loop3, …; each adds a nested iteration level.
+        if field == "_loop" or _LOOP_KEY_RE.match(field):
             if isinstance(value, OdinString):
-                source_path = value.value.lstrip("@").strip()
+                raw = value.value
             elif isinstance(value, OdinReference):
-                source_path = value.path
+                raw = value.path
+            else:
+                raw = ""
+            loop_path, loop_alias = _split_loop_alias(raw)
+            loop_path = loop_path.lstrip("@").strip() if not loop_path.startswith(".") else loop_path
+            if field == "_loop":
+                source_path = loop_path
+            loops.append(LoopSpec(path=loop_path, alias=loop_alias))
+            continue
+
+        # Handle _literal / _literalBody directives (literal text block segment)
+        if field == "_literal":
+            seg.is_literal = True
+            continue
+        if field == "_literalBody":
+            if isinstance(value, OdinString):
+                seg.literal_body = value.value
             continue
 
         # Handle _from directive (alternative loop source; takes priority over _loop)
@@ -645,13 +664,33 @@ def _build_segment(
     # _from takes priority over _loop / path as the loop source.
     if from_path is not None:
         source_path = from_path
+        if loops:
+            loops[0] = LoopSpec(path=source_path, alias=loops[0].alias)
     seg.source_path = source_path
     seg.mappings = mappings
+    seg.loops = loops
 
-    if not mappings and source_path is None and not seg.children:
+    if (
+        not mappings
+        and source_path is None
+        and not seg.children
+        and not seg.is_literal
+    ):
         return None
 
     return seg
+
+
+# Repeated loop keys: _loop2, _loop3, …
+_LOOP_KEY_RE = re.compile(r"^_loop\d+$")
+
+
+def _split_loop_alias(raw: str) -> tuple[str, Optional[str]]:
+    """Split a loop directive value `path :as alias` into (path, alias)."""
+    if ":as" in raw:
+        head, _, tail = raw.partition(":as")
+        return head.strip(), tail.strip() or None
+    return raw.strip(), None
 
 
 def _set_segment_condition(seg: TransformSegment, value: Any) -> None:

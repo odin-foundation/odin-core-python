@@ -371,68 +371,28 @@ class Tokenizer:
         return Token(TokenType.ERROR, "Unterminated string", line, col)
 
     def _scan_multiline_string(self, line: int, col: int) -> Token:
-        """Scan a triple-quoted string (opening \"\"\" already consumed)."""
+        """Scan a triple-quoted string (opening \"\"\" already consumed).
+
+        Content is captured verbatim and may span newlines; closes at the next `\"\"\"`.
+        """
         text = self._text
         text_len = self._len
+        content_start = self._pos
         pos = self._pos
-        parts: list[str] = []
 
         while pos < text_len:
-            ch = text[pos]
-            if ch == '"' and pos + 2 < text_len and text[pos + 1] == '"' and text[pos + 2] == '"':
-                # Closing """
-                value = "".join(parts)
+            if (
+                text[pos] == '"'
+                and pos + 2 < text_len
+                and text[pos + 1] == '"'
+                and text[pos + 2] == '"'
+            ):
+                value = text[content_start:pos]
                 pos += 3
-                # Update line/col tracking for multiline
                 self._update_line_col_from(self._pos, pos)
                 self._pos = pos
-                return Token(TokenType.STRING_QUOTED, value, line, col)
-            elif ch == '\\':
-                pos += 1
-                if pos >= text_len:
-                    self._update_line_col_from(self._pos, pos)
-                    self._pos = pos
-                    return Token(TokenType.ERROR, "Unterminated multi-line string", line, col)
-                esc = text[pos]
-                pos += 1
-                mapped = _ESCAPE_MAP.get(esc)
-                if mapped is not None:
-                    parts.append(mapped)
-                elif esc == '$':
-                    # Literal dollar; keep the backslash before `${` so the
-                    # interpolation layer recognizes the escaped marker.
-                    if pos < text_len and text[pos] == '{':
-                        parts.append('\\$')
-                    else:
-                        parts.append('$')
-                elif esc == 'u' and pos + 4 <= text_len:
-                    try:
-                        parts.append(chr(int(text[pos:pos + 4], 16)))
-                    except (ValueError, OverflowError):
-                        parts.append('?')
-                    pos += 4
-                elif esc == 'U' and pos + 8 <= text_len:
-                    try:
-                        parts.append(chr(int(text[pos:pos + 8], 16)))
-                    except (ValueError, OverflowError):
-                        parts.append('?')
-                    pos += 8
-                else:
-                    esc_col = self._col + (pos - self._pos) - 2
-                    self._update_line_col_from(self._pos, pos)
-                    self._pos = pos
-                    return Token(TokenType.ERROR, f"Invalid escape sequence: \\{esc}",
-                                 line, esc_col)
-            else:
-                # Batch non-special characters
-                batch_start = pos
-                pos += 1
-                while pos < text_len:
-                    c = text[pos]
-                    if c == '"' or c == '\\':
-                        break
-                    pos += 1
-                parts.append(text[batch_start:pos])
+                return Token(TokenType.STRING_MULTILINE, value, line, col)
+            pos += 1
 
         self._update_line_col_from(self._pos, pos)
         self._pos = pos

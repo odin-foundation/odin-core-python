@@ -54,8 +54,16 @@ def _process_segments(
     """Process segments to produce fixed-width lines."""
     for segment in segments:
         name = segment.name
-        is_array = name.endswith("[]") or segment.source_path is not None
+        is_array = name.endswith("[]") or segment.source_path is not None or bool(segment.loops)
         clean_name = name[:-2] if name.endswith("[]") else name
+
+        # Literal segment: emit pre-rendered interpolated lines verbatim.
+        if getattr(segment, "is_literal", False):
+            seg_data = _get_nested(output, clean_name) if clean_name else output
+            literal_lines = _literal_lines(seg_data)
+            if literal_lines is not None:
+                lines.extend(literal_lines)
+            continue
 
         # Extract field layout from segment mappings
         field_layout = _extract_field_layout(segment)
@@ -86,6 +94,16 @@ def _process_segments(
         # Process child segments
         if segment.children:
             _process_segments(output, segment.children, lines, target_line_width, pad_char)
+
+
+def _literal_lines(seg_data: Optional[DynValue]) -> Optional[List[str]]:
+    """Extract pre-rendered literal lines from a literal segment's output."""
+    if seg_data is None or not seg_data.is_object():
+        return None
+    holder = seg_data.as_object().get("__literalLines")
+    if holder is None or not holder.is_array():
+        return None
+    return [item.as_string() for item in holder.as_array()]
 
 
 def _finalize_line(line: str, target_line_width: Optional[int], pad_char: str) -> str:

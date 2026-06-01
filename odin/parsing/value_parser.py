@@ -80,7 +80,7 @@ def parse_value(tokens: List[Token], pos: int) -> Tuple[OdinValue, int]:
         return TRUE, 1
 
     # Quoted string
-    if tt == TokenType.STRING_QUOTED:
+    if tt == TokenType.STRING_QUOTED or tt == TokenType.STRING_MULTILINE:
         return OdinString(token.value), 1
 
     # Number #

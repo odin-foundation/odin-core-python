@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from odin.transform.dyn_value import DynValue, DynType
 from odin.transform.types import (
@@ -401,6 +401,40 @@ class TransformEngine:
         # only (accumulators, verbs) and never appears in the output.
         is_sink = clean_name.startswith("_") and not is_root
 
+        # Literal block: emit interpolated text lines instead of field mappings.
+        if segment.is_literal:
+            return self._process_literal_segment(
+                segment, ctx, output, clean_name, is_root,
+            )
+
+        # Nested cross-product loops (one or more :loop directives).
+        if segment.loops and segment.is_array:
+            if ctx.loop_depth >= MAX_LOOP_NESTING:
+                ctx.errors.append(TransformError(
+                    message="Maximum loop nesting exceeded",
+                    path=clean_name,
+                ))
+                return output
+
+            old_loop_vars = dict(ctx.loop_vars)
+            old_depth = ctx.loop_depth
+            results: List[DynValue] = []
+            self._iterate_loops(
+                segment, 0, ctx, ctx.source, results, current_prefix, None,
+            )
+            ctx.loop_vars = old_loop_vars
+            ctx.loop_depth = old_depth
+
+            if is_sink:
+                return output
+
+            array_result = DynValue.of_array(results)
+            if not is_root:
+                _set_path(output, clean_name, array_result)
+            else:
+                output = array_result
+            return output
+
         # Array loop
         if segment.source_path is not None:
             array_val = _resolve_path(ctx.source, segment.source_path, ctx)
@@ -499,6 +533,223 @@ class TransformEngine:
             _set_path(output, clean_name, seg_output)
 
         return output
+
+    def _iterate_loops(
+        self,
+        segment: TransformSegment,
+        depth: int,
+        ctx: _ExecContext,
+        base: DynValue,
+        results: List[DynValue],
+        current_prefix: str,
+        on_item: Optional[Callable[[], None]],
+    ) -> None:
+        """Drive nested :loop directives as a cross-product.
+
+        Each level binds its alias and current item, then recurses; the innermost
+        level emits one element per item. A relative inner path (`.field`) resolves
+        against the enclosing item. A non-array source at any level yields no rows.
+        """
+        if ctx.loop_depth >= MAX_LOOP_NESTING:
+            ctx.errors.append(TransformError(
+                message="Maximum loop nesting exceeded",
+                path=segment.name,
+            ))
+            return
+
+        loops = segment.loops
+        loop = loops[depth]
+        is_outermost = depth == 0
+        is_innermost = depth == len(loops) - 1
+
+        loop_path = loop.path or ""
+        if loop_path.startswith("@"):
+            loop_path = loop_path[1:]
+
+        if loop_path.startswith("."):
+            items_val = _resolve_sub_path(ctx.loop_vars.get("_item"), loop_path[1:])
+        elif is_outermost:
+            items_val = _resolve_path(ctx.source, loop_path, ctx)
+        else:
+            first_part = loop_path.split(".")[0]
+            if first_part in ctx.loop_vars:
+                aliased = ctx.loop_vars[first_part]
+                rest = loop_path[len(first_part) + 1:] if "." in loop_path else ""
+                items_val = _resolve_sub_path(aliased, rest) if rest else aliased
+            else:
+                items_val = _resolve_sub_path(base, loop_path)
+
+        if items_val is None or not items_val.is_array():
+            return
+
+        items = items_val.as_array()
+        counter_name = segment.counter_name
+
+        ctx.loop_depth += 1
+        saved_vars = dict(ctx.loop_vars)
+        for idx, item in enumerate(items):
+            ctx.loop_vars["_item"] = item
+            ctx.loop_vars["_index"] = DynValue.of_integer(idx)
+            ctx.loop_vars["_length"] = DynValue.of_integer(len(items))
+            if loop.alias:
+                ctx.loop_vars[loop.alias] = item
+            if counter_name and is_innermost:
+                counter_val = DynValue.of_integer(idx)
+                ctx.loop_vars[counter_name] = counter_val
+                ctx.accumulators[counter_name] = counter_val
+
+            if not is_innermost:
+                self._iterate_loops(
+                    segment, depth + 1, ctx, item, results, current_prefix, on_item,
+                )
+                continue
+
+            if on_item is not None:
+                on_item()
+                continue
+
+            is_value_only = bool(segment.mappings) and all(
+                m.target == "_" for m in segment.mappings
+            )
+            if is_value_only:
+                val = DynValue.of_null()
+                for mapping in segment.mappings:
+                    val = self._process_mapping(
+                        mapping, ctx, item, val, current_prefix, is_loop=True,
+                    )
+                results.append(val)
+            else:
+                row_output = DynValue.of_object({})
+                for mapping in segment.mappings:
+                    if mapping.target == "_":
+                        self._evaluate_expression(mapping.expression, ctx, item, row_output)
+                    else:
+                        row_output = self._process_mapping(
+                            mapping, ctx, item, row_output, current_prefix, is_loop=False,
+                        )
+                results.append(row_output)
+
+        ctx.loop_vars = saved_vars
+        ctx.loop_depth -= 1
+
+    def _process_literal_segment(
+        self,
+        segment: TransformSegment,
+        ctx: _ExecContext,
+        output: DynValue,
+        clean_name: str,
+        is_root: bool,
+    ) -> DynValue:
+        """Render a :literal segment to interpolated text lines.
+
+        One leading and one trailing delimiter newline are stripped; each remaining
+        source line becomes an output line. Under a :loop the block renders per item.
+        """
+        template = _normalize_literal_body(segment.literal_body or "")
+        lines: List[str] = []
+
+        def render() -> None:
+            current = ctx.loop_vars.get("_item", ctx.source)
+            rendered = self._render_literal(template, ctx, current, segment.name)
+            lines.extend(rendered.split("\n"))
+
+        if segment.loops and segment.is_array:
+            if ctx.loop_depth >= MAX_LOOP_NESTING:
+                ctx.errors.append(TransformError(
+                    message="Maximum loop nesting exceeded",
+                    path=clean_name,
+                ))
+                return output
+            old_loop_vars = dict(ctx.loop_vars)
+            old_depth = ctx.loop_depth
+            self._iterate_loops(segment, 0, ctx, ctx.source, [], clean_name, render)
+            ctx.loop_vars = old_loop_vars
+            ctx.loop_depth = old_depth
+        else:
+            render()
+
+        literal_val = DynValue.of_object({"__literalLines": DynValue.of_array(
+            [DynValue.of_string(line) for line in lines]
+        )})
+        if not is_root:
+            _set_path(output, clean_name, literal_val)
+        else:
+            output = literal_val
+        return output
+
+    def _render_literal(
+        self,
+        template: str,
+        ctx: _ExecContext,
+        current: DynValue,
+        segment_path: str,
+    ) -> str:
+        """Interpolate ${…} markers in a literal block body.
+
+        Escapes: `\\${`→`${`, `\\$`→`$`, `\\\\`→`\\`. A `${…}` whose body contains
+        another `${` is rejected as a nested interpolation (T014).
+        """
+        out: List[str] = []
+        i = 0
+        n = len(template)
+        empty = DynValue.of_object({})
+
+        while i < n:
+            ch = template[i]
+            if ch == "\\":
+                nxt = template[i + 1] if i + 1 < n else ""
+                if nxt == "$" and i + 2 < n and template[i + 2] == "{":
+                    out.append("${")
+                    i += 3
+                    continue
+                if nxt == "\\":
+                    out.append("\\")
+                    i += 2
+                    continue
+                if nxt == "$":
+                    out.append("$")
+                    i += 2
+                    continue
+                out.append("\\")
+                i += 1
+                continue
+
+            if ch == "$" and i + 1 < n and template[i + 1] == "{":
+                close = template.find("}", i + 2)
+                if close == -1:
+                    out.append(template[i:])
+                    break
+                expr = template[i + 2:close]
+                if "${" in expr:
+                    ctx.errors.append(TransformError(
+                        message=f"Nested interpolation is not allowed: {expr}",
+                        path=segment_path,
+                        code="T014",
+                    ))
+                    return ""
+                out.append(self._eval_literal_expr(expr.strip(), ctx, current, empty))
+                i = close + 1
+                continue
+
+            out.append(ch)
+            i += 1
+
+        return "".join(out)
+
+    def _eval_literal_expr(
+        self, expr: str, ctx: _ExecContext, current: DynValue, empty: DynValue
+    ) -> str:
+        """Evaluate one literal-block ${…} expression (path or verb) to a string."""
+        if expr.startswith("%"):
+            call = _parse_inline_verb(expr)
+            if call is not None:
+                value = self._execute_verb_call(call, ctx, current, empty)
+                return _dyn_to_interp_string(value)
+            return "${" + expr + "}"
+        if expr.startswith("@"):
+            value = self._evaluate_copy(CopyExpression(path=expr[1:]), ctx, current, empty)
+            return _dyn_to_interp_string(value)
+        return "${" + expr + "}"
 
     def _process_mapping(
         self,
@@ -689,6 +940,14 @@ class TransformEngine:
             return ctx.loop_vars.get("_index", DynValue.of_null())
         if clean_path == "_length":
             return ctx.loop_vars.get("_length", DynValue.of_null())
+
+        # Loop alias reference (e.g. `@veh.vin` where `veh` is a :loop :as alias).
+        if clean_path:
+            first_part = clean_path.split(".")[0]
+            if first_part in ctx.loop_vars:
+                aliased = ctx.loop_vars[first_part]
+                rest = clean_path[len(first_part) + 1:] if "." in clean_path else ""
+                return _resolve_sub_path(aliased, rest) if rest else aliased
 
         # Empty path (@) — return current source (loop item in loops)
         if not clean_path:
@@ -991,6 +1250,20 @@ def _dyn_to_plain(value: DynValue) -> Any:
 
 
 # ── Path Resolution ────────────────────────────────────────────────────────────
+
+
+def _normalize_literal_body(body: str) -> str:
+    """Strip one leading and one trailing delimiter newline from a literal body."""
+    s = body
+    if s.startswith("\r\n"):
+        s = s[2:]
+    elif s.startswith("\n"):
+        s = s[1:]
+    if s.endswith("\r\n"):
+        s = s[:-2]
+    elif s.endswith("\n"):
+        s = s[:-1]
+    return s
 
 
 def _resolve_path(source: DynValue, path: str, ctx: _ExecContext) -> DynValue:

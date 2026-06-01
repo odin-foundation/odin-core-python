@@ -259,6 +259,13 @@ class OdinParser:
                 )
                 continue
 
+            # Bare `"""..."""` body line (literal block under a `:literal` segment)
+            if tabular_columns is None and tt == TokenType.STRING_MULTILINE:
+                pos = self._parse_bare_literal_block(
+                    tokens, pos, end, current_header, builder, assigned_paths,
+                )
+                continue
+
             # Tabular data rows
             if tabular_columns is not None and tt != TokenType.HEADER_OPEN:
                 if self._is_assignment_start(tokens, pos, end):
@@ -384,10 +391,39 @@ class OdinParser:
             pos += 1
         value = "".join(parts).strip() or "true"
 
-        full_path = f"{current_header}._{name}" if current_header else f"_{name}"
+        # Repeated `:loop` lines on one segment each get a distinct key so all survive.
+        key = f"_{name}"
+        if name == "loop":
+            base = f"{current_header}._loop" if current_header else "_loop"
+            n = 1
+            while (base if n == 1 else f"{base}{n}") in assigned_paths:
+                n += 1
+            key = "_loop" if n == 1 else f"_loop{n}"
+
+        full_path = f"{current_header}.{key}" if current_header else key
         if full_path not in assigned_paths:
             assigned_paths.add(full_path)
             builder.set(full_path, OdinString(value=value))
+        return pos
+
+    def _parse_bare_literal_block(
+        self,
+        tokens: List[Token],
+        pos: int,
+        end: int,
+        current_header: Optional[str],
+        builder: OdinDocumentBuilder,
+        assigned_paths: Set[str],
+    ) -> int:
+        """Store a bare `\"\"\"...\"\"\"` body line as a synthetic `<header>._literalBody`."""
+        token = tokens[pos]
+        pos += 1
+        full_path = (
+            f"{current_header}._literalBody" if current_header else "_literalBody"
+        )
+        if full_path not in assigned_paths:
+            assigned_paths.add(full_path)
+            builder.set(full_path, OdinString(value=token.value))
         return pos
 
     def _reconstruct_header_expr(
