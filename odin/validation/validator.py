@@ -53,6 +53,57 @@ from odin.validation.invariant_evaluator import evaluate_invariant
 from odin.validation.validate_schema_def import validate_schema_definition
 
 
+class _SchemaMemo:
+    """Cached schema-only validation results, independent of any document."""
+
+    __slots__ = ("type_registry", "ref_errors", "def_errors", "base_fields")
+
+    def __init__(
+        self,
+        type_registry: Optional[Dict[str, Any]],
+        ref_errors: List[ValidationError],
+        def_errors: List[ValidationError],
+        base_fields: Dict[str, SchemaField],
+    ) -> None:
+        self.type_registry = type_registry
+        self.ref_errors = ref_errors      # schema-level V012/V013
+        self.def_errors = def_errors      # V017
+        self.base_fields = base_fields    # composition passes 1 and 2
+
+
+# Schema instances are unhashable (non-frozen dataclass), so the memo is stashed
+# on the schema itself; the registry identity is verified on hit so a schema
+# reused with a different registry recomputes.
+_SCHEMA_MEMO_ATTR = "_validation_memo"
+
+
+def _get_schema_memo(
+    schema: OdinSchema,
+    type_registry: Optional[Dict[str, Any]],
+) -> _SchemaMemo:
+    """Compute (or reuse) schema-only results: V012/V013 type-reference errors,
+    V017 schema-definition errors, and the composition-expanded base field map.
+    """
+    cached = getattr(schema, _SCHEMA_MEMO_ATTR, None)
+    if cached is not None and cached.type_registry is type_registry:
+        return cached
+
+    ref_errors: List[ValidationError] = []
+    _check_schema_references(schema, ref_errors, ValidateOptions(), type_registry)
+
+    def_errors: List[ValidationError] = []
+    validate_schema_definition(schema, def_errors, type_registry)
+
+    base_fields = _expand_base_compositions(schema, type_registry)
+
+    memo = _SchemaMemo(type_registry, ref_errors, def_errors, base_fields)
+    try:
+        object.__setattr__(schema, _SCHEMA_MEMO_ATTR, memo)
+    except (AttributeError, TypeError):
+        pass  # schema does not permit attribute caching; recompute next time
+    return memo
+
+
 def validate(
     doc: OdinDocument,
     schema: OdinSchema,
@@ -78,6 +129,10 @@ def validate(
     errors: List[ValidationError] = []
     warnings: List[ValidationWarning] = []
 
+    # Schema-only results (V012/V013 type refs, V017, base composition map) are
+    # computed once per schema and reused across documents.
+    memo = _get_schema_memo(schema, type_registry)
+
     def _add_error(error: ValidationError) -> bool:
         """Add error and return True if we should stop (fail_fast)."""
         errors.append(error)
@@ -87,13 +142,22 @@ def validate(
     # V012: Circular reference detection
     # V013: Unresolved reference detection
     # ------------------------------------------------------------------
-    _check_references(doc, errors, options, schema, type_registry)
+    _check_references(
+        doc, errors, options, schema, type_registry, include_schema_refs=False
+    )
     if options.fail_fast and errors:
         return ValidationResult(valid=False, errors=errors, warnings=warnings)
+    # Append copies of the memoized schema-level reference errors.
+    for error in memo.ref_errors:
+        errors.append(error)
+        if options.fail_fast:
+            return ValidationResult(valid=False, errors=errors, warnings=warnings)
 
     # Expand type compositions and field-level type references into concrete
     # fields (e.g. customer._composition: @a & @b -> customer.<fields>).
-    expanded_fields = _expand_type_compositions(doc, schema, type_registry)
+    expanded_fields = _expand_type_compositions(
+        doc, schema, type_registry, base_fields=memo.base_fields
+    )
 
     # ------------------------------------------------------------------
     # Per-field validation: V001, V002, V003, V004, V005, V010
@@ -313,7 +377,8 @@ def validate(
     # ------------------------------------------------------------------
     # V017: Schema-definition well-formedness (override/intersection/tabular/default)
     # ------------------------------------------------------------------
-    validate_schema_definition(schema, errors, type_registry)
+    for error in memo.def_errors:
+        errors.append(error)
 
     return ValidationResult(
         valid=len(errors) == 0,
@@ -793,8 +858,14 @@ def _check_references(
     options: ValidateOptions,
     schema: Optional[OdinSchema] = None,
     type_registry: Optional[Dict[str, Any]] = None,
+    include_schema_refs: bool = True,
 ) -> None:
-    """Check V012 (circular references) and V013 (unresolved references)."""
+    """Check V012 (circular references) and V013 (unresolved references).
+
+    Document-level reference checks always run. Schema-level reference checks
+    (independent of the document) run only when ``include_schema_refs`` is set;
+    they are otherwise computed once and memoized at the schema level.
+    """
     # Collect all reference paths from the document
     ref_map: Dict[str, str] = {}  # path -> target_path
     for path in doc.paths():
@@ -836,7 +907,7 @@ def _check_references(
             current = ref_map[current]
 
     # Schema-level reference checks
-    if schema is not None:
+    if schema is not None and include_schema_refs:
         _check_schema_references(schema, errors, options, type_registry)
 
 
@@ -864,17 +935,17 @@ def _object_present(doc: OdinDocument, path: str) -> bool:
     return any(p.startswith(prefix) for p in doc.paths())
 
 
-def _expand_type_compositions(
-    doc: OdinDocument,
+def _expand_base_compositions(
     schema: OdinSchema,
     type_registry: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, SchemaField]:
-    """Expand object compositions and field-level type references into fields.
+    """Schema-only field expansion (passes 1 and 2 of composition expansion).
 
     - A `<path>._composition` typeRef merges every referenced (and intersected)
       type's fields under the parent path.
-    - A field typed `@SomeType` enforces that type's fields under the field path
-      when the sub-object is present or the field is required.
+    - Explicit fields override inherited ones and skip composition markers.
+
+    Does not consult the document; the result is reusable across documents.
     """
     result: Dict[str, SchemaField] = {}
 
@@ -896,6 +967,30 @@ def _expand_type_compositions(
         if path.endswith("._composition"):
             continue
         result[path] = fld
+
+    return result
+
+
+def _expand_type_compositions(
+    doc: OdinDocument,
+    schema: OdinSchema,
+    type_registry: Optional[Dict[str, Any]] = None,
+    base_fields: Optional[Dict[str, SchemaField]] = None,
+) -> Dict[str, SchemaField]:
+    """Expand object compositions and field-level type references into fields.
+
+    - A `<path>._composition` typeRef merges every referenced (and intersected)
+      type's fields under the parent path.
+    - A field typed `@SomeType` enforces that type's fields under the field path
+      when the sub-object is present or the field is required.
+
+    The schema-only base map (passes 1 and 2) may be supplied precomputed; the
+    third pass depends on the document and always runs here.
+    """
+    if base_fields is None:
+        result = _expand_base_compositions(schema, type_registry)
+    else:
+        result = dict(base_fields)
 
     # Third pass: a field typed @SomeType enforces the referenced type's fields.
     for path, fld in list(result.items()):

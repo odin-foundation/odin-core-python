@@ -17,6 +17,24 @@ _TEMPORAL_RE = re.compile(
 )
 
 
+# Compiled pattern-constraint regexes keyed by pattern source; None marks a
+# pattern that fails to compile. Compiled once per distinct pattern, reused for
+# every value.
+_PATTERN_CACHE: dict = {}
+
+
+def _compiled_pattern(pattern: str):
+    """Compile (once) a pattern-constraint regex; None if it fails to compile."""
+    if pattern in _PATTERN_CACHE:
+        return _PATTERN_CACHE[pattern]
+    try:
+        compiled = re.compile(pattern)
+    except re.error:
+        compiled = None
+    _PATTERN_CACHE[pattern] = compiled
+    return compiled
+
+
 def check_bounds(value: Any, constraint: BoundsConstraint) -> bool:
     """Check if a value satisfies a bounds constraint."""
     if value is None:
@@ -66,10 +84,10 @@ def check_pattern(value: Any, constraint: PatternConstraint) -> bool:
     if value is None:
         return True
     s = str(value)
-    try:
-        return bool(re.search(constraint.pattern, s))
-    except re.error:
+    compiled = _compiled_pattern(constraint.pattern)
+    if compiled is None:
         return True  # Invalid pattern - don't fail validation
+    return bool(compiled.search(s))
 
 
 def check_enum(value: Any, values: list) -> bool:

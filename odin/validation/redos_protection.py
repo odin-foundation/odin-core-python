@@ -157,6 +157,15 @@ def analyze(pattern: Optional[str]) -> RedosAnalysis:
     return RedosAnalysis(safe=True, reason=None, complexity=complexity)
 
 
+# ReDoS safety verdicts keyed by pattern source; the static analysis runs once
+# per distinct pattern and is reused for every value.
+_SAFETY_CACHE: dict = {}
+
+
 def is_safe_pattern(regex: str) -> bool:
     """Convenience wrapper: return True if *regex* is considered safe."""
-    return analyze(regex).safe
+    if regex in _SAFETY_CACHE:
+        return _SAFETY_CACHE[regex]
+    safe = analyze(regex).safe
+    _SAFETY_CACHE[regex] = safe
+    return safe

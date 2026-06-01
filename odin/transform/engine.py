@@ -133,6 +133,54 @@ def _directive_int(directives, name: str):
     return None
 
 
+class _MappingInfo:
+    """Precomputed, document-independent directive/modifier facts for a mapping."""
+
+    __slots__ = (
+        "mapping", "conditions", "directive_names", "pos", "len",
+        "extraction_directives", "remaining_directives",
+        "has_raw", "has_array", "is_required", "is_confidential",
+    )
+
+    def __init__(self, mapping: FieldMapping) -> None:
+        self.mapping = mapping  # keep alive to anchor the id() key
+        directives = mapping.directives
+        # :if / :unless gate conditions, in order.
+        self.conditions = [
+            (d.name, d.value) for d in directives
+            if d.name in ("if", "unless") and d.value is not None
+        ]
+        self.directive_names = [d.name for d in directives]
+        self.pos = _directive_int(directives, "pos")
+        self.len = _directive_int(directives, "len")
+        self.extraction_directives = [
+            d for d in directives if d.name in ("pos", "len", "field")
+        ]
+        self.remaining_directives = [
+            d for d in directives if d.name not in ("pos", "len", "field")
+        ]
+        self.has_raw = any(d.name == "raw" for d in directives)
+        self.has_array = any(d.name == "array" for d in directives)
+        mods = mapping.modifiers
+        self.is_required = mods is not None and mods.required
+        self.is_confidential = mods is not None and mods.confidential
+
+
+# Precomputed mapping facts keyed by mapping identity; the mapping is retained in
+# the info object so the id() key cannot be reused while cached.
+_MAPPING_INFO_CACHE: Dict[int, _MappingInfo] = {}
+
+
+def _mapping_info(mapping: FieldMapping) -> _MappingInfo:
+    """Return precomputed directive/modifier facts for a mapping, building once."""
+    key = id(mapping)
+    info = _MAPPING_INFO_CACHE.get(key)
+    if info is None or info.mapping is not mapping:
+        info = _MappingInfo(mapping)
+        _MAPPING_INFO_CACHE[key] = info
+    return info
+
+
 def _is_modifier_compatible(modifier: str, fmt: str) -> bool:
     allowed = _FORMAT_SPECIFIC_MODIFIERS.get(modifier)
     if allowed is None:
@@ -950,26 +998,28 @@ class TransformEngine:
         is_loop: bool = False,
     ) -> DynValue:
         try:
+            info = _mapping_info(mapping)
+
             # Field :if / :unless conditions gate whether the field is emitted.
             cond_source = current_source if (is_loop and not current_source.is_null()) else ctx.source
-            for d in mapping.directives:
-                if d.name == "if" and d.value is not None:
-                    if not _evaluate_condition(d.value, cond_source, ctx):
+            for name, cond_val in info.conditions:
+                if name == "if":
+                    if not _evaluate_condition(cond_val, cond_source, ctx):
                         return output
-                elif d.name == "unless" and d.value is not None:
-                    if _evaluate_condition(d.value, cond_source, ctx):
+                else:  # unless
+                    if _evaluate_condition(cond_val, cond_source, ctx):
                         return output
 
             # T007: warn on modifiers that are not valid for the target format.
-            for d in mapping.directives:
-                if not _is_modifier_compatible(d.name, ctx.target_format):
+            for d_name in info.directive_names:
+                if not _is_modifier_compatible(d_name, ctx.target_format):
                     ctx.warnings.append(
-                        invalid_modifier_warning(d.name, ctx.target_format, mapping.target))
+                        invalid_modifier_warning(d_name, ctx.target_format, mapping.target))
 
             # T010: fixed-width field whose pos + len exceeds the configured lineWidth.
             if ctx.target_format in ("fixed-width", "fixed_width", "fwf") and ctx.line_width:
-                pos = _directive_int(mapping.directives, "pos")
-                length = _directive_int(mapping.directives, "len")
+                pos = info.pos
+                length = info.len
                 if pos is not None and length is not None and pos + length > ctx.line_width:
                     ctx.warnings.append(
                         position_overflow_warning(pos, length, ctx.line_width, mapping.target))
@@ -977,7 +1027,7 @@ class TransformEngine:
             # For verb expressions with extraction directives (pos/len/field),
             # pre-extract from the verb's reference argument before calling the verb
             expr = mapping.expression
-            extraction_directives = _get_extraction_directives(mapping.directives)
+            extraction_directives = info.extraction_directives
 
             if (extraction_directives
                     and isinstance(expr, TransformExpression)
@@ -987,9 +1037,8 @@ class TransformEngine:
                     expr.call, extraction_directives, ctx, current_source, output
                 )
                 # Apply remaining non-extraction directives
-                remaining = [d for d in mapping.directives
-                             if d.name not in ("pos", "len", "field")]
-                value = _apply_mapping_directives(value, remaining, ctx.source_format)
+                value = _apply_mapping_directives(
+                    value, info.remaining_directives, ctx.source_format)
             else:
                 value = self._evaluate_expression(expr, ctx, current_source, output)
                 # Apply directives (type coercion etc.)
@@ -1003,7 +1052,7 @@ class TransformEngine:
             # path is absent, SOURCE_MISSING when present-but-null); an ordinary
             # field honors the onMissing policy (fail -> T005, warn -> warning,
             # skip/default -> keep null). A path that is merely null is not absent.
-            is_required = mapping.modifiers is not None and mapping.modifiers.required
+            is_required = info.is_required
             if value.is_null():
                 raw_path = (mapping.expression.path
                             if isinstance(mapping.expression, CopyExpression)
@@ -1028,17 +1077,15 @@ class TransformEngine:
                     return output
 
             # :raw emits inline JSON structurally instead of an escaped string.
-            if any(d.name == "raw" for d in mapping.directives):
+            if info.has_raw:
                 value = _parse_raw_json_value(value)
 
             # :array wraps the value in a single-element array.
-            if any(d.name == "array" for d in mapping.directives):
+            if info.has_array:
                 value = DynValue.of_array([value])
 
             # Confidential enforcement at mapping level
-            if (mapping.modifiers is not None
-                    and mapping.modifiers.confidential
-                    and ctx.enforce_confidential is not None):
+            if info.is_confidential and ctx.enforce_confidential is not None:
                 value = _apply_confidential_to_value(value, ctx.enforce_confidential)
 
             if mapping.target == "_":
@@ -2079,6 +2126,49 @@ def _parse_raw_json_value(value: DynValue) -> DynValue:
         return value
 
 
+# Compiled :validate regex keyed by pattern source; None marks an invalid pattern.
+_VALIDATE_PATTERN_CACHE: Dict[str, "Optional[_re.Pattern[str]]"] = {}
+
+# Parsed :enum allowed-value lists keyed by directive source.
+_ENUM_VALUES_CACHE: Dict[str, List[str]] = {}
+
+# Parsed :range bounds (lo, hi) keyed by directive source.
+_RANGE_BOUNDS_CACHE: Dict[str, "tuple[Optional[float], Optional[float]]"] = {}
+
+
+def _compiled_validate_pattern(pattern: str) -> "Optional[_re.Pattern[str]]":
+    """Compile (once) a :validate pattern; None if it fails to compile."""
+    if pattern in _VALIDATE_PATTERN_CACHE:
+        return _VALIDATE_PATTERN_CACHE[pattern]
+    try:
+        compiled: Optional[_re.Pattern[str]] = _re.compile(pattern)
+    except _re.error:
+        compiled = None
+    _VALIDATE_PATTERN_CACHE[pattern] = compiled
+    return compiled
+
+
+def _enum_values(spec: str) -> List[str]:
+    """Parse (once) a :enum directive value into its allowed-value list."""
+    cached = _ENUM_VALUES_CACHE.get(spec)
+    if cached is None:
+        cached = [v.strip().strip("\"'") for v in spec.split(",")]
+        _ENUM_VALUES_CACHE[spec] = cached
+    return cached
+
+
+def _range_bounds(spec: str) -> "tuple[Optional[float], Optional[float]]":
+    """Parse (once) a :range directive value into (lo, hi) numeric bounds."""
+    cached = _RANGE_BOUNDS_CACHE.get(spec)
+    if cached is None:
+        parts = spec.split("..")
+        lo = _try_float(parts[0]) if len(parts) > 0 else None
+        hi = _try_float(parts[1]) if len(parts) > 1 else None
+        cached = (lo, hi)
+        _RANGE_BOUNDS_CACHE[spec] = cached
+    return cached
+
+
 def _validate_field_value(
     value: DynValue, mapping: FieldMapping, ctx: _ExecContext
 ) -> bool:
@@ -2095,26 +2185,24 @@ def _validate_field_value(
         if d.name == "validate" and d.value is not None:
             pattern = d.value
             text = value.as_string()
-            try:
-                if _re.search(pattern, text) is None:
-                    failures.append(f"value '{text}' does not match pattern '{pattern}'")
-            except _re.error:
+            compiled = _compiled_validate_pattern(pattern)
+            if compiled is None:
                 failures.append(f"invalid validation pattern '{pattern}'")
+            elif compiled.search(text) is None:
+                failures.append(f"value '{text}' does not match pattern '{pattern}'")
         elif d.name == "enum" and d.value is not None:
-            allowed = [v.strip().strip("\"'") for v in d.value.split(",")]
+            allowed = _enum_values(d.value)
             text = value.as_string()
             if text not in allowed:
                 failures.append(f"value '{text}' is not one of [{', '.join(allowed)}]")
         elif d.name == "range" and d.value is not None:
-            parts = d.value.split("..")
             num = _dyn_numeric_of(value)
             if num is None:
                 failures.append(
                     f"value '{value.as_string()}' is not numeric for range {d.value}"
                 )
             else:
-                lo = _try_float(parts[0]) if len(parts) > 0 else None
-                hi = _try_float(parts[1]) if len(parts) > 1 else None
+                lo, hi = _range_bounds(d.value)
                 if (lo is not None and num < lo) or (hi is not None and num > hi):
                     failures.append(f"value {num} is outside range {d.value}")
 

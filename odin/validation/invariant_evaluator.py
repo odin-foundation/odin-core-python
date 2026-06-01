@@ -1,6 +1,6 @@
 """Invariant expression evaluation.
 
-Recursive-descent evaluator over the invariant grammar:
+Recursive-descent parser over the invariant grammar:
     expression     = logic_or
     logic_or       = logic_and , { "||" , logic_and }
     logic_and      = equality , { "&&" , equality }
@@ -10,12 +10,15 @@ Recursive-descent evaluator over the invariant grammar:
     multiplicative = unary , { ( "*" | "/" | "%" ) , unary }
     unary          = [ "!" ] , primary
     primary        = path | number | string | "(" , expression , ")"
+
+An expression is parsed to an AST once and cached by its source string; each
+document validation evaluates the cached AST against that document's values.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from odin.types.values import (
     OdinValue,
@@ -114,93 +117,94 @@ def _tokenize(expr: str) -> List[_Token]:
     return tokens
 
 
-def evaluate_invariant(expr: str, resolve: FieldResolver) -> InvariantResult:
-    """Parse and evaluate an invariant expression against document field values."""
+# ─────────────────────────────────────────────────────────────────────────────
+# AST nodes (tuples: (kind, ...)) and parse cache
+# ─────────────────────────────────────────────────────────────────────────────
+#   ("number", float)            ("string", str)         ("bool", bool)
+#   ("field", str)               ("not", node)
+#   ("logic", op, left, right)   ("equality", op, left, right)
+#   ("compare", op, left, right) ("additive", op, left, right)
+#   ("multiplicative", op, left, right)
+
+_Node = tuple
+
+# Parsed, document-independent invariant ASTs keyed by source string.
+_AST_CACHE: Dict[str, _Node] = {}
+
+
+def _parse_to_ast(expr: str) -> _Node:
+    """Parse an invariant expression to an AST. Raises on malformed input."""
     tokens = _tokenize(expr)
-    state = {"pos": 0, "absent": False, "null": False}
+    pos = 0
 
     def peek() -> Optional[_Token]:
-        return tokens[state["pos"]] if state["pos"] < len(tokens) else None
+        return tokens[pos] if pos < len(tokens) else None
 
     def nxt() -> Optional[_Token]:
-        tok = tokens[state["pos"]] if state["pos"] < len(tokens) else None
-        state["pos"] += 1
+        nonlocal pos
+        tok = tokens[pos] if pos < len(tokens) else None
+        pos += 1
         return tok
 
-    def parse_expression() -> Operand:
+    def parse_expression() -> _Node:
         return parse_logic_or()
 
-    def parse_logic_or() -> Operand:
+    def parse_logic_or() -> _Node:
         left = parse_logic_and()
         while peek() is not None and peek().text == "||":
             nxt()
             right = parse_logic_and()
-            left = _to_bool(left) or _to_bool(right)
+            left = ("logic", "||", left, right)
         return left
 
-    def parse_logic_and() -> Operand:
+    def parse_logic_and() -> _Node:
         left = parse_equality()
         while peek() is not None and peek().text == "&&":
             nxt()
             right = parse_equality()
-            left = _to_bool(left) and _to_bool(right)
+            left = ("logic", "&&", left, right)
         return left
 
-    def parse_equality() -> Operand:
+    def parse_equality() -> _Node:
         left = parse_comparison()
         while peek() is not None and peek().text in ("==", "!=", "="):
             op = nxt().text
             right = parse_comparison()
-            eq = _loose_equals(left, right)
-            left = (not eq) if op == "!=" else eq
+            left = ("equality", op, left, right)
         return left
 
-    def parse_comparison() -> Operand:
+    def parse_comparison() -> _Node:
         left = parse_additive()
         while peek() is not None and peek().text in (">", "<", ">=", "<="):
             op = nxt().text
             right = parse_additive()
-            left = _compare(left, op, right)
+            left = ("compare", op, left, right)
         return left
 
-    def parse_additive() -> Operand:
+    def parse_additive() -> _Node:
         left = parse_multiplicative()
         while peek() is not None and peek().text in ("+", "-"):
             op = nxt().text
             right = parse_multiplicative()
-            ln = _to_num(left)
-            rn = _to_num(right)
-            if ln is None or rn is None:
-                left = _NAN
-            else:
-                left = ln + rn if op == "+" else ln - rn
+            left = ("additive", op, left, right)
         return left
 
-    def parse_multiplicative() -> Operand:
+    def parse_multiplicative() -> _Node:
         left = parse_unary()
         while peek() is not None and peek().text in ("*", "/", "%"):
             op = nxt().text
             right = parse_unary()
-            ln = _to_num(left)
-            rn = _to_num(right)
-            if ln is None or rn is None:
-                left = _NAN
-            elif op == "*":
-                left = ln * rn
-            elif op == "/":
-                left = _NAN if rn == 0 else ln / rn
-            else:
-                left = _NAN if rn == 0 else ln % rn
+            left = ("multiplicative", op, left, right)
         return left
 
-    def parse_unary() -> Operand:
+    def parse_unary() -> _Node:
         if peek() is not None and peek().text == "!":
             nxt()
             operand = parse_unary()
-            return not _to_bool(operand)
+            return ("not", operand)
         return parse_primary()
 
-    def parse_primary() -> Operand:
+    def parse_primary() -> _Node:
         tok = nxt()
         if tok is None:
             raise ValueError("Unexpected end of invariant expression")
@@ -213,27 +217,97 @@ def evaluate_invariant(expr: str, resolve: FieldResolver) -> InvariantResult:
             return inner
         if tok.kind == "number":
             try:
-                return float(tok.text)
+                return ("number", float(tok.text))
             except ValueError:
                 raise ValueError(f"Invalid number '{tok.text}'")
         if tok.kind == "string":
-            return tok.text
+            return ("string", tok.text)
         if tok.kind == "ident":
             if tok.text in _BOOLEAN_LITERALS:
-                return _BOOLEAN_LITERALS[tok.text]
-            value = resolve(tok.text)
-            if value is None:
-                state["absent"] = True
-                return _NAN
-            if isinstance(value, OdinNull):
-                state["null"] = True
-                return None
-            return _operand_from_value(value)
+                return ("bool", _BOOLEAN_LITERALS[tok.text])
+            return ("field", tok.text)
         raise ValueError(f"Unexpected token '{tok.text}'")
 
-    final = parse_expression()
+    ast = parse_expression()
     if peek() is not None:
         raise ValueError("Unexpected trailing tokens in invariant expression")
+    return ast
+
+
+def _get_ast(expr: str) -> _Node:
+    """Return the cached AST for an expression, parsing on first use."""
+    ast = _AST_CACHE.get(expr)
+    if ast is None:
+        ast = _parse_to_ast(expr)
+        _AST_CACHE[expr] = ast
+    return ast
+
+
+def _eval_node(node: _Node, state: dict, resolve: FieldResolver) -> Operand:
+    kind = node[0]
+    if kind == "number":
+        return node[1]
+    if kind == "string":
+        return node[1]
+    if kind == "bool":
+        return node[1]
+    if kind == "field":
+        value = resolve(node[1])
+        if value is None:
+            state["absent"] = True
+            return _NAN
+        if isinstance(value, OdinNull):
+            state["null"] = True
+            return None
+        return _operand_from_value(value)
+    if kind == "not":
+        return not _to_bool(_eval_node(node[1], state, resolve))
+    if kind == "logic":
+        op = node[1]
+        left = _eval_node(node[2], state, resolve)
+        right = _eval_node(node[3], state, resolve)
+        return _to_bool(left) or _to_bool(right) if op == "||" \
+            else _to_bool(left) and _to_bool(right)
+    if kind == "equality":
+        op = node[1]
+        left = _eval_node(node[2], state, resolve)
+        right = _eval_node(node[3], state, resolve)
+        eq = _loose_equals(left, right)
+        return (not eq) if op == "!=" else eq
+    if kind == "compare":
+        left = _eval_node(node[2], state, resolve)
+        right = _eval_node(node[3], state, resolve)
+        return _compare(left, node[1], right)
+    if kind == "additive":
+        op = node[1]
+        ln = _to_num(_eval_node(node[2], state, resolve))
+        rn = _to_num(_eval_node(node[3], state, resolve))
+        if ln is None or rn is None:
+            return _NAN
+        return ln + rn if op == "+" else ln - rn
+    if kind == "multiplicative":
+        op = node[1]
+        ln = _to_num(_eval_node(node[2], state, resolve))
+        rn = _to_num(_eval_node(node[3], state, resolve))
+        if ln is None or rn is None:
+            return _NAN
+        if op == "*":
+            return ln * rn
+        if op == "/":
+            return _NAN if rn == 0 else ln / rn
+        return _NAN if rn == 0 else ln % rn
+    raise ValueError(f"Unknown node kind '{kind}'")
+
+
+def evaluate_invariant(expr: str, resolve: FieldResolver) -> InvariantResult:
+    """Parse and evaluate an invariant expression against document field values.
+
+    The parsed AST is cached by expression source, so re-validating documents
+    against the same schema reuses the compiled form.
+    """
+    ast = _get_ast(expr)
+    state = {"absent": False, "null": False}
+    final = _eval_node(ast, state, resolve)
 
     if state["null"]:
         result: Optional[bool] = False
