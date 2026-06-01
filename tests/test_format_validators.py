@@ -30,6 +30,18 @@ from odin.validation.format_validators import (
     validate_state_us,
     validate_creditcard,
     validate_ssn,
+    validate_uri,
+    validate_datetime,
+    validate_iban,
+    validate_bic,
+    validate_routing,
+    validate_cusip,
+    validate_isin,
+    validate_lei,
+    validate_npi,
+    validate_dea,
+    validate_imei,
+    validate_iccid,
 )
 
 
@@ -534,6 +546,217 @@ class TestRegistry:
             "email", "url", "uuid", "ipv4", "ipv6", "date", "time",
             "timestamp", "hostname", "regex", "phone", "zip", "naic",
             "fein", "vin", "currency-code", "country-alpha2",
-            "country-alpha3", "state-us", "creditcard", "ssn",
+            "country-alpha3", "state-us", "creditcard", "credit-card",
+            "ssn", "uri", "datetime", "date-time", "iban", "bic", "swift",
+            "routing", "cusip", "isin", "lei", "npi", "dea", "imei", "iccid",
         ]:
             assert get_format_validator(name) is not None, f"Missing validator: {name}"
+
+
+# ── URI ────────────────────────────────────────────────────────────────────
+
+
+class TestUri:
+    def test_valid_urn(self):
+        assert validate("urn:isbn:0451450523", "uri")
+
+    def test_valid_mailto(self):
+        assert validate("mailto:user@example.com", "uri")
+
+    def test_valid_https(self):
+        assert validate_uri("https://example.com/path")
+
+    def test_invalid_no_scheme(self):
+        assert not validate("/relative/path", "uri")
+
+    def test_invalid_with_whitespace(self):
+        assert not validate_uri("http://exa mple.com")
+
+
+# ── Datetime ───────────────────────────────────────────────────────────────
+
+
+class TestDatetime:
+    def test_valid_datetime(self):
+        assert validate("2024-06-15T10:30:00", "datetime")
+
+    def test_valid_datetime_zulu(self):
+        assert validate("2024-06-15T10:30:00Z", "datetime")
+
+    def test_alias_date_time_zulu(self):
+        assert validate("2024-06-15T10:30:00Z", "date-time")
+
+    def test_invalid_space_separator(self):
+        assert not validate("2024-06-15 10:30:00", "datetime")
+
+    def test_invalid_date_only(self):
+        assert not validate("2024-06-15", "datetime")
+
+    def test_invalid_slashes(self):
+        assert not validate("06/15/2024", "date-time")
+
+
+# ── Credit card (hyphenated alias) ─────────────────────────────────────────
+
+
+class TestCreditCardAlias:
+    def test_valid_visa(self):
+        assert validate("4111111111111111", "credit-card")
+
+    def test_invalid_checksum(self):
+        assert not validate("4111111111111112", "credit-card")
+
+    def test_invalid_too_short(self):
+        assert not validate("411111111111", "credit-card")
+
+
+# ── IBAN ───────────────────────────────────────────────────────────────────
+
+
+class TestIban:
+    def test_valid_gb(self):
+        assert validate("GB82WEST12345698765432", "iban")
+
+    def test_valid_de(self):
+        assert validate("DE89370400440532013000", "iban")
+
+    def test_invalid_no_country(self):
+        assert not validate("1234WEST", "iban")
+
+    def test_invalid_too_short(self):
+        assert not validate_iban("GB82")
+
+
+# ── BIC / SWIFT ────────────────────────────────────────────────────────────
+
+
+class TestBic:
+    def test_valid_8(self):
+        assert validate("DEUTDEFF", "bic")
+
+    def test_valid_11(self):
+        assert validate("DEUTDEFF500", "bic")
+
+    def test_invalid_9_chars(self):
+        assert not validate("DEUTDEFF5", "bic")
+
+    def test_swift_valid(self):
+        assert validate("BOFAUS3N", "swift")
+
+    def test_swift_invalid_too_short(self):
+        assert not validate("BOFAUS3", "swift")
+
+
+# ── Routing ────────────────────────────────────────────────────────────────
+
+
+class TestRouting:
+    def test_valid(self):
+        assert validate("021000021", "routing")
+
+    def test_invalid_8_digits(self):
+        assert not validate("12345678", "routing")
+
+    def test_invalid_letters(self):
+        assert not validate_routing("02100002A")
+
+
+# ── CUSIP ──────────────────────────────────────────────────────────────────
+
+
+class TestCusip:
+    def test_valid(self):
+        assert validate("037833100", "cusip")
+
+    def test_invalid_too_short(self):
+        assert not validate("03783310", "cusip")
+
+    def test_invalid_symbol(self):
+        assert not validate("037833$00", "cusip")
+
+
+# ── ISIN ───────────────────────────────────────────────────────────────────
+
+
+class TestIsin:
+    def test_valid(self):
+        assert validate("US0378331005", "isin")
+
+    def test_invalid_too_short(self):
+        assert not validate("US037833100", "isin")
+
+    def test_invalid_non_digit_check(self):
+        assert not validate("US037833100X", "isin")
+
+
+# ── LEI ────────────────────────────────────────────────────────────────────
+
+
+class TestLei:
+    def test_valid(self):
+        assert validate("529900T8BM49AURSDO55", "lei")
+
+    def test_invalid_too_short(self):
+        assert not validate("529900T8BM49AURSDO5", "lei")
+
+    def test_invalid_symbol(self):
+        assert not validate("529900T8BM49AURSDO5$", "lei")
+
+
+# ── NPI ────────────────────────────────────────────────────────────────────
+
+
+class TestNpi:
+    def test_valid(self):
+        assert validate("1234567890", "npi")
+
+    def test_invalid_too_short(self):
+        assert not validate("123456789", "npi")
+
+    def test_invalid_too_long(self):
+        assert not validate("12345678901", "npi")
+
+
+# ── DEA ────────────────────────────────────────────────────────────────────
+
+
+class TestDea:
+    def test_valid(self):
+        assert validate("AB1234567", "dea")
+
+    def test_invalid_one_letter(self):
+        assert not validate("A1234567", "dea")
+
+    def test_invalid_short_digits(self):
+        assert not validate("AB123456", "dea")
+
+
+# ── IMEI ───────────────────────────────────────────────────────────────────
+
+
+class TestImei:
+    def test_valid(self):
+        assert validate("490154203237518", "imei")
+
+    def test_invalid_too_short(self):
+        assert not validate("49015420323751", "imei")
+
+    def test_invalid_too_long(self):
+        assert not validate("4901542032375189", "imei")
+
+
+# ── ICCID ──────────────────────────────────────────────────────────────────
+
+
+class TestIccid:
+    def test_valid_19(self):
+        assert validate("8901234567890123456", "iccid")
+
+    def test_valid_20(self):
+        assert validate("89012345678901234567", "iccid")
+
+    def test_invalid_too_short(self):
+        assert not validate("890123456789012345", "iccid")
+
+    def test_invalid_letter(self):
+        assert not validate("8901234567890123456X", "iccid")

@@ -346,6 +346,68 @@ def validate_creditcard(value: str) -> bool:
     return total % 10 == 0
 
 
+def validate_uri(value: str) -> bool:
+    """Validate URI with a scheme (scheme:rest, no whitespace)."""
+    return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:\S*$", value))
+
+
+def validate_datetime(value: str) -> bool:
+    """Validate ISO 8601 datetime (date + T + time)."""
+    return bool(re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", value))
+
+
+def validate_iban(value: str) -> bool:
+    """Validate IBAN shape (2 letters, 2 digits, 4-30 alphanumeric)."""
+    return bool(re.match(r"^[A-Z]{2}\d{2}[A-Z0-9]{4,30}$", value, re.IGNORECASE))
+
+
+def validate_bic(value: str) -> bool:
+    """Validate BIC/SWIFT shape (8 or 11 characters)."""
+    return bool(
+        re.match(r"^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$", value, re.IGNORECASE)
+    )
+
+
+def validate_routing(value: str) -> bool:
+    """Validate ABA routing number (9 digits)."""
+    return len(value) == 9 and _all_digits(value)
+
+
+def validate_cusip(value: str) -> bool:
+    """Validate CUSIP shape (9 alphanumeric characters)."""
+    return bool(re.match(r"^[A-Z0-9]{9}$", value, re.IGNORECASE))
+
+
+def validate_isin(value: str) -> bool:
+    """Validate ISIN shape (2 letters, 9 alphanumeric, 1 digit)."""
+    return bool(re.match(r"^[A-Z]{2}[A-Z0-9]{9}\d$", value, re.IGNORECASE))
+
+
+def validate_lei(value: str) -> bool:
+    """Validate LEI shape (20 alphanumeric characters)."""
+    return bool(re.match(r"^[A-Z0-9]{20}$", value, re.IGNORECASE))
+
+
+def validate_npi(value: str) -> bool:
+    """Validate NPI shape (10 digits)."""
+    return len(value) == 10 and _all_digits(value)
+
+
+def validate_dea(value: str) -> bool:
+    """Validate DEA number shape (2 letters, 7 digits)."""
+    return bool(re.match(r"^[A-Z]{2}\d{7}$", value, re.IGNORECASE))
+
+
+def validate_imei(value: str) -> bool:
+    """Validate IMEI shape (15 digits)."""
+    return len(value) == 15 and _all_digits(value)
+
+
+def validate_iccid(value: str) -> bool:
+    """Validate ICCID shape (19-20 digits)."""
+    return len(value) in (19, 20) and _all_digits(value)
+
+
 def validate_ssn(value: str) -> bool:
     """Validate US Social Security Number."""
     digit_chars: List[str] = [ch for ch in value if ch.isdigit()]
@@ -390,6 +452,21 @@ _FORMAT_VALIDATORS: Dict[str, Callable[[str], bool]] = {
     "country-alpha3": validate_country_alpha3,
     "state-us": validate_state_us,
     "creditcard": validate_creditcard,
+    "credit-card": validate_creditcard,
+    "uri": validate_uri,
+    "datetime": validate_datetime,
+    "date-time": validate_datetime,
+    "iban": validate_iban,
+    "bic": validate_bic,
+    "swift": validate_bic,
+    "routing": validate_routing,
+    "cusip": validate_cusip,
+    "isin": validate_isin,
+    "lei": validate_lei,
+    "npi": validate_npi,
+    "dea": validate_dea,
+    "imei": validate_imei,
+    "iccid": validate_iccid,
     "ssn": validate_ssn,
 }
 
