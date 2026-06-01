@@ -57,7 +57,32 @@ def parse_transform(text: str) -> OdinTransform:
     transform = parse_transform_doc(doc)
     # Post-process: extract directives from raw text for fields that lost them
     _patch_missing_directives(transform, text)
+    # @import directives are validated but not retained by the core parser; scan
+    # the raw text so an injected resolver can satisfy them.
+    if not transform.imports:
+        transform.imports = _scan_import_directives(text)
     return transform
+
+
+def _scan_import_directives(text: str) -> List[ImportRef]:
+    """Collect `@import <path> [as <alias>]` directives from raw transform text."""
+    imports: List[ImportRef] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("@import"):
+            continue
+        rest = line[len("@import"):].strip()
+        if not rest:
+            continue
+        alias: Optional[str] = None
+        parts = rest.split()
+        if len(parts) >= 3 and parts[-2] == "as":
+            alias = parts[-1]
+            path = " ".join(parts[:-2])
+        else:
+            path = rest
+        imports.append(ImportRef(path=path.strip(), alias=alias))
+    return imports
 
 
 def parse_transform_doc(doc: OdinDocument) -> OdinTransform:

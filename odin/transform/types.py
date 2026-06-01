@@ -233,6 +233,7 @@ class TransformError:
 class TransformWarning:
     message: str = ""
     path: Optional[str] = None
+    code: Optional[str] = None
 
 
 @dataclass

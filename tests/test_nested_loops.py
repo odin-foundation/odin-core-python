@@ -153,23 +153,23 @@ class TestNestedLoopsEdge:
 
 
 class TestNestedLoopsErrors:
-    def test_non_array_inner_yields_no_rows_without_error(self):
+    def test_non_array_inner_raises_t009(self):
         transform = _HEADER + (
             '{rows[]}\n'
             ':loop vehicles :as veh\n'
             ':loop .coverages :as cov\n'
             'vin = "@veh.vin"\n'
         )
-        # `coverages` is a scalar, not an array → that outer item contributes nothing.
+        # `coverages` is a present scalar, not an array → T009.
         source = {"vehicles": [
             {"vin": "V1", "coverages": "not-an-array"},
             {"vin": "V2", "coverages": [{}]},
         ]}
         result = _run(transform, source)
-        assert not result.errors
-        assert _dyn_to_py(result.output)["rows"] == [{"vin": "V2"}]
+        assert not result.success
+        assert result.errors[0].code == "T009"
 
-    def test_non_array_outer_yields_no_rows_without_error(self):
+    def test_non_array_outer_raises_t009(self):
         transform = _HEADER + (
             '{rows[]}\n'
             ':loop vehicles :as veh\n'
@@ -177,5 +177,15 @@ class TestNestedLoopsErrors:
             'vin = "@veh.vin"\n'
         )
         result = _run(transform, {"vehicles": "scalar"})
+        assert not result.success
+        assert result.errors[0].code == "T009"
+
+    def test_absent_loop_source_yields_no_rows_without_error(self):
+        transform = _HEADER + (
+            '{rows[]}\n'
+            ':loop missing :as m\n'
+            'vin = "@m.vin"\n'
+        )
+        result = _run(transform, {"other": 1})
         assert not result.errors
         assert _dyn_to_py(result.output)["rows"] == []

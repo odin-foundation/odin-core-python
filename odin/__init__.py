@@ -572,5 +572,12 @@ def execute_transform(transform_def, source, options=None):
     if isinstance(transform_def, (str, bytes)):
         transform_def = parse_transform(transform_def)
 
-    engine = TransformEngine(create_default_registry())
+    import_resolver = None
+    if options is not None:
+        if isinstance(options, dict):
+            import_resolver = options.get("import_resolver")
+        else:
+            import_resolver = getattr(options, "import_resolver", None)
+
+    engine = TransformEngine(create_default_registry(), import_resolver=import_resolver)
     return engine.execute(transform_def, source)

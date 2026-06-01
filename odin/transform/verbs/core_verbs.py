@@ -8,6 +8,7 @@ from odin.transform.dyn_value import DynValue, DynType
 from odin.transform.verbs.helpers import coerce_str, is_truthy
 from odin.transform.errors import (
     lookup_key_not_found_error, lookup_key_not_found_warning,
+    lookup_table_not_found_error, lookup_table_not_found_warning,
 )
 
 
@@ -22,6 +23,22 @@ def _report_lookup_miss(ctx: object, table_name: str, key: str) -> None:
         warnings = getattr(ctx, "warnings", None)
         if warnings is not None:
             warnings.append(lookup_key_not_found_warning(table_name, key))
+
+
+def _report_table_not_found(ctx: object, table_name: str) -> None:
+    """Report a missing lookup table (T003) honoring the onMissing policy.
+
+    Distinct from a missing key (T004): the referenced table was never declared.
+    """
+    policy = getattr(ctx, "on_missing", None)
+    if policy == "fail":
+        errors = getattr(ctx, "errors", None)
+        if errors is not None:
+            errors.append(lookup_table_not_found_error(table_name))
+    elif policy == "warn":
+        warnings = getattr(ctx, "warnings", None)
+        if warnings is not None:
+            warnings.append(lookup_table_not_found_warning(table_name))
 
 
 def verb_concat(args: List[DynValue], ctx: object) -> DynValue:
@@ -163,7 +180,7 @@ def _do_lookup(args: List[DynValue], ctx: object, default: DynValue | None) -> D
     table = tables.get(table_name)
     if table is None:
         if default is None:
-            _report_lookup_miss(ctx, table_name, match_key)
+            _report_table_not_found(ctx, table_name)
         return default if default is not None else DynValue.of_null()
 
     columns = getattr(table, "columns", [])

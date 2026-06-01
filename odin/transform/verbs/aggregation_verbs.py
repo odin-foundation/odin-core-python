@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+import math
+
 from odin.transform.dyn_value import DynValue, DynType
 from odin.transform.verbs.helpers import coerce_num, coerce_str, numeric_result
+from odin.transform.errors import accumulator_overflow_error
+
+# Largest integer magnitude representable without precision loss (2^53 - 1).
+_MAX_SAFE_INTEGER = (1 << 53) - 1
 
 
 def _extract_items(v: DynValue) -> Optional[List[DynValue]]:
@@ -152,6 +158,16 @@ def verb_accumulate(args: List[DynValue], ctx: object) -> DynValue:
         if cur_n is None:
             cur_n = 0.0
         new_val = (cur_n or 0.0) + (n or 0.0)
+        # T008: the running sum is no longer exactly representable (non-finite,
+        # or an integer accumulator beyond safe-integer magnitude). Retain the
+        # last valid value.
+        integer_accumulator = current is not None and current.type == DynType.INTEGER
+        if (not math.isfinite(new_val)
+                or (integer_accumulator and abs(new_val) > _MAX_SAFE_INTEGER)):
+            errors = getattr(ctx, "errors", None)
+            if errors is not None:
+                errors.append(accumulator_overflow_error(name, new_val))
+            return current if current is not None else DynValue.of_null()
         result = numeric_result(new_val)
     elif verb_name == "count":
         cur_n = _to_double(current) if current else 0.0

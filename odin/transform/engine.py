@@ -31,7 +31,17 @@ from odin.transform.types import (
 from odin.transform.verb_registry import VerbRegistry
 import re as _re
 
-from odin.transform.errors import dangling_branch_error, validation_error
+from odin.transform.errors import (
+    dangling_branch_error,
+    validation_error,
+    unknown_verb_error,
+    source_path_not_found_error,
+    source_path_not_found_warning,
+    source_missing_error,
+    loop_source_not_array_error,
+    invalid_output_format_error,
+    CodedTransformError,
+)
 from odin.transform.verbs.collection_verbs import _check_filter_condition
 from odin.types.document import OdinModifiers
 from odin.types.values import (
@@ -105,11 +115,18 @@ class _ExecContext:
 class TransformEngine:
     """ODIN transform execution engine."""
 
-    def __init__(self, registry: VerbRegistry) -> None:
+    def __init__(
+        self,
+        registry: VerbRegistry,
+        import_resolver: Optional[Callable[[str], Optional[str]]] = None,
+    ) -> None:
         self.registry = registry
+        self.import_resolver = import_resolver
 
     def execute(self, transform: OdinTransform, source: Any) -> TransformResult:
         """Execute a transform on source data."""
+        if self.import_resolver is not None and transform.imports:
+            self._resolve_imports(transform, self.import_resolver)
         # Check for multi-record discriminator mode
         discriminator = transform.source.discriminator if transform.source else None
         source_format = transform.source.format if transform.source else ""
@@ -158,7 +175,7 @@ class TransformEngine:
             )
 
         # Format output
-        formatted = self._format_output(output, transform, ctx.field_modifiers)
+        formatted = self._format_output(output, transform, ctx.field_modifiers, ctx.errors)
 
         return TransformResult(
             success=len(ctx.errors) == 0,
@@ -168,6 +185,47 @@ class TransformEngine:
             warnings=ctx.warnings,
             output_modifiers=ctx.field_modifiers,
         )
+
+    def _resolve_imports(
+        self,
+        transform: OdinTransform,
+        resolver: Callable[[str], Optional[str]],
+    ) -> None:
+        """Merge imported tables, constants, accumulators, and named segments.
+
+        Local declarations win over imported ones; imported segments are appended
+        so their mappings remain referenceable. An import the resolver cannot
+        satisfy (returns None) is skipped.
+        """
+        from odin.transform.transform_parser import parse_transform as _parse
+
+        seen: set = set()
+        existing_paths = {s.name for s in transform.segments}
+        for imp in transform.imports:
+            if imp.path in seen:
+                continue
+            seen.add(imp.path)
+
+            text = resolver(imp.path)
+            if text is None:
+                continue
+
+            imported = _parse(text)
+
+            for name, table in imported.tables.items():
+                if name not in transform.tables:
+                    transform.tables[name] = table
+            for name, value in imported.constants.items():
+                if name not in transform.constants:
+                    transform.constants[name] = value
+            for name, acc in imported.accumulators.items():
+                if name not in transform.accumulators:
+                    transform.accumulators[name] = acc
+            for segment in imported.segments:
+                if segment.name == "" or segment.name in existing_paths:
+                    continue
+                transform.segments.append(segment)
+                existing_paths.add(segment.name)
 
     def invoke_verb(self, name: str, args: List[DynValue], ctx: Optional[VerbContext] = None) -> DynValue:
         """Invoke a verb directly (for unit testing)."""
@@ -300,7 +358,7 @@ class TransformEngine:
             _set_path(output, path, DynValue.of_array(arr))
 
         # Format output
-        formatted = self._format_output(output, transform, ctx.field_modifiers)
+        formatted = self._format_output(output, transform, ctx.field_modifiers, ctx.errors)
 
         return TransformResult(
             success=len(ctx.errors) == 0,
@@ -419,9 +477,22 @@ class TransformEngine:
             old_loop_vars = dict(ctx.loop_vars)
             old_depth = ctx.loop_depth
             results: List[DynValue] = []
-            self._iterate_loops(
-                segment, 0, ctx, ctx.source, results, current_prefix, None,
-            )
+            # A non-array loop source raises a coded error honoring onError.
+            try:
+                self._iterate_loops(
+                    segment, 0, ctx, ctx.source, results, current_prefix, None,
+                )
+            except CodedTransformError as e:
+                ctx.loop_vars = old_loop_vars
+                ctx.loop_depth = old_depth
+                if ctx.on_error == "warn":
+                    err = e.transform_error
+                    ctx.warnings.append(TransformWarning(
+                        message=err.message, path=err.path, code=err.code,
+                    ))
+                elif ctx.on_error != "skip":
+                    ctx.errors.append(e.transform_error)
+                return output
             ctx.loop_vars = old_loop_vars
             ctx.loop_depth = old_depth
 
@@ -580,6 +651,11 @@ class TransformEngine:
                 items_val = _resolve_sub_path(base, loop_path)
 
         if items_val is None or not items_val.is_array():
+            # A present non-array scalar is a T009 error; an absent (None/null)
+            # source yields zero rows silently.
+            if items_val is not None and not items_val.is_null():
+                raise CodedTransformError(
+                    loop_source_not_array_error(loop_path, segment.name))
             return
 
         items = items_val.as_array()
@@ -662,7 +738,19 @@ class TransformEngine:
                 return output
             old_loop_vars = dict(ctx.loop_vars)
             old_depth = ctx.loop_depth
-            self._iterate_loops(segment, 0, ctx, ctx.source, [], clean_name, render)
+            try:
+                self._iterate_loops(segment, 0, ctx, ctx.source, [], clean_name, render)
+            except CodedTransformError as e:
+                ctx.loop_vars = old_loop_vars
+                ctx.loop_depth = old_depth
+                if ctx.on_error == "warn":
+                    err = e.transform_error
+                    ctx.warnings.append(TransformWarning(
+                        message=err.message, path=err.path, code=err.code,
+                    ))
+                elif ctx.on_error != "skip":
+                    ctx.errors.append(e.transform_error)
+                return output
             ctx.loop_vars = old_loop_vars
             ctx.loop_depth = old_depth
         else:
@@ -796,6 +884,34 @@ class TransformEngine:
             if not _validate_field_value(value, mapping, ctx):
                 return output
 
+            # Missing source path: a :required field always fails (T005 when the
+            # path is absent, SOURCE_MISSING when present-but-null); an ordinary
+            # field honors the onMissing policy (fail -> T005, warn -> warning,
+            # skip/default -> keep null). A path that is merely null is not absent.
+            is_required = mapping.modifiers is not None and mapping.modifiers.required
+            if value.is_null():
+                raw_path = (mapping.expression.path
+                            if isinstance(mapping.expression, CopyExpression)
+                            else mapping.target)
+                rep_path = raw_path[1:] if raw_path.startswith(".") else raw_path
+                if self._is_copy_source_absent(mapping, ctx, current_source, is_loop):
+                    if is_required:
+                        ctx.errors.append(
+                            source_path_not_found_error(rep_path, mapping.target))
+                        return output
+                    policy = ctx.on_missing
+                    if policy == "fail":
+                        ctx.errors.append(
+                            source_path_not_found_error(rep_path, mapping.target))
+                        return output
+                    if policy == "warn":
+                        ctx.warnings.append(
+                            source_path_not_found_warning(rep_path, mapping.target))
+                elif is_required:
+                    # Present but explicitly null.
+                    ctx.errors.append(source_missing_error(mapping.target))
+                    return output
+
             # :raw emits inline JSON structurally instead of an escaped string.
             if any(d.name == "raw" for d in mapping.directives):
                 value = _parse_raw_json_value(value)
@@ -827,6 +943,19 @@ class TransformEngine:
                     )
                     ctx.field_modifiers[full_key] = mapping.modifiers
 
+        except CodedTransformError as e:
+            # Coded errors carry a stable T-code; preserve it under fail/warn.
+            err = e.transform_error
+            if ctx.on_error == "warn":
+                ctx.warnings.append(TransformWarning(
+                    message=err.message, path=mapping.target, code=err.code,
+                ))
+            elif ctx.on_error == "skip":
+                pass
+            else:
+                ctx.errors.append(TransformError(
+                    message=err.message, path=mapping.target, code=err.code,
+                ))
         except Exception as e:
             message = str(e)
             if ctx.on_error == "warn":
@@ -914,6 +1043,48 @@ class TransformEngine:
 
         return DynValue.of_string(_INTERP_RE.sub(replace, template))
 
+    def _is_copy_source_absent(
+        self,
+        mapping: FieldMapping,
+        ctx: _ExecContext,
+        current_source: DynValue,
+        is_loop: bool,
+    ) -> bool:
+        """Whether a mapping copies a source path that is absent (not present-null).
+
+        Only plain copy expressions over ordinary source paths qualify; verbs,
+        literals, objects, special paths, and counters are never missing-source.
+        """
+        expr = mapping.expression
+        if not isinstance(expr, CopyExpression):
+            return False
+        # A :default directive supplies its own fallback; not a missing source.
+        if any(d.name == "default" for d in mapping.directives):
+            return False
+        path = expr.path
+        if path in ("", "_item", "_index", "_length"):
+            return False
+        clean = path.lstrip("@")
+        if clean in ("", "_item", "_index", "_length"):
+            return False
+        if clean.startswith("$"):
+            return False
+        if clean in ctx.loop_vars:
+            return False
+
+        # Relative path resolves against the current loop item (or source).
+        if path.startswith("."):
+            base = current_source if (is_loop and not current_source.is_null()) else ctx.source
+            return _sub_path_absent(base, path[1:])
+
+        first_part = clean.split(".")[0]
+        if first_part in ctx.loop_vars:
+            aliased = ctx.loop_vars[first_part]
+            rest = clean[len(first_part) + 1:] if "." in clean else ""
+            return _sub_path_absent(aliased, rest)
+
+        return _sub_path_absent(ctx.source, clean)
+
     def _evaluate_copy(
         self,
         expr: CopyExpression,
@@ -997,11 +1168,9 @@ class TransformEngine:
             args = [self._evaluate_verb_arg(a, ctx, current_source, current_output) for a in call.args]
             return args[0] if args else DynValue.of_null()
         if fn is None:
-            ctx.errors.append(TransformError(
-                message=f"Unknown verb: {call.verb}",
-                path="",
-            ))
-            return DynValue.of_null()
+            # T001: unknown built-in verb. Raised so the mapping handler preserves
+            # the stable code under the onError policy.
+            raise CodedTransformError(unknown_verb_error(call.verb))
 
         # Conditional verbs need lazy evaluation of branches
         if call.verb in _LAZY_EVAL_VERBS:
@@ -1154,18 +1323,33 @@ class TransformEngine:
             ))
             return DynValue.of_null()
 
-    def _format_output(self, output: DynValue, transform: OdinTransform, field_modifiers: Optional[Dict[str, 'OdinModifiers']] = None) -> Optional[str]:
-        """Format the output DynValue using the target format."""
+    def _format_output(self, output: DynValue, transform: OdinTransform, field_modifiers: Optional[Dict[str, 'OdinModifiers']] = None, errors: Optional[List[TransformError]] = None) -> Optional[str]:
+        """Format the output DynValue using the target format.
+
+        The effective format is the declared target format, or the right-hand
+        side of the direction header when no target format is declared. An
+        unrecognized format raises T006 rather than silently falling back.
+        """
         target_format = transform.target.format
         if not target_format:
-            # Default to json if direction specifies it
+            # Derive from the direction header (e.g. "json->odin" -> "odin").
             direction = transform.metadata.direction or ""
             if "->" in direction:
-                target_format = direction.split("->")[1]
-            if not target_format:
-                target_format = "json"
+                target_format = direction.split("->")[1].strip()
 
         opts = transform.target.options
+
+        known_formats = {
+            "json", "odin", "csv", "xml",
+            "fixed-width", "fixed_width", "fwf",
+            "flat", "properties", "yaml",
+        }
+        if target_format and target_format not in known_formats:
+            if errors is not None:
+                errors.append(invalid_output_format_error(target_format))
+            return None
+        if not target_format:
+            target_format = "json"
 
         try:
             if target_format == "json":
@@ -1201,9 +1385,7 @@ class TransformEngine:
                 if target_format == "yaml":
                     style = "yaml"
                 return format_flat(output, style=style)
-            # Unknown format - try json as fallback
-            from odin.transform.formatters.json_formatter import format_json
-            return format_json(output)
+            return None
         except Exception:
             return None
 
@@ -1264,6 +1446,45 @@ def _normalize_literal_body(body: str) -> str:
     elif s.endswith("\n"):
         s = s[:-1]
     return s
+
+
+def _is_present(value: Optional[DynValue]) -> bool:
+    """Whether a resolved value exists (object key present / array index in range).
+
+    A present value may still be a null; absence is the missing-source condition.
+    """
+    return value is not None
+
+
+def _sub_path_absent(source: Optional[DynValue], path: str) -> bool:
+    """Whether a dotted/bracketed path is absent (vs present with a null value)."""
+    if source is None:
+        return True
+    if not path:
+        return False
+    current = source
+    for seg in _parse_path_segments(path):
+        if current is None:
+            return True
+        if seg.startswith("[") and seg.endswith("]"):
+            try:
+                idx = int(seg[1:-1])
+            except ValueError:
+                return True
+            if not current.is_array():
+                return True
+            items = current.as_array()
+            if not (0 <= idx < len(items)):
+                return True
+            current = items[idx]
+        else:
+            if not current.is_object():
+                return True
+            child = current.get(seg)
+            if child is None:
+                return True
+            current = child
+    return False
 
 
 def _resolve_path(source: DynValue, path: str, ctx: _ExecContext) -> DynValue:

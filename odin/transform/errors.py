@@ -65,6 +65,21 @@ class TransformErrorCodes:
     VALUE_OVERFLOW = "VALUE_OVERFLOW"
 
 
+# ── Coded Error Wrapper ───────────────────────────────────────────────────────
+
+
+class CodedTransformError(Exception):
+    """Carries a stable transform error code raised during evaluation.
+
+    The mapping/loop handlers read ``.transform_error`` to preserve the code
+    instead of collapsing it to TRANSFORM_ERROR.
+    """
+
+    def __init__(self, transform_error: TransformError) -> None:
+        super().__init__(transform_error.message)
+        self.transform_error = transform_error
+
+
 # ── Error Factory Functions ───────────────────────────────────────────────────
 
 
@@ -99,6 +114,17 @@ def lookup_table_not_found_error(
     )
 
 
+def lookup_table_not_found_warning(
+    table_name: str, field: str | None = None
+) -> TransformWarning:
+    """Create a T003 Lookup Table Not Found warning (for warn mode)."""
+    return TransformWarning(
+        code=TransformErrorCodes.T003_LOOKUP_TABLE_NOT_FOUND,
+        message=f"Lookup table not found: {table_name}",
+        path=field,
+    )
+
+
 def lookup_key_not_found_error(
     table_name: str, key: str, field: str | None = None
 ) -> TransformError:
@@ -115,6 +141,7 @@ def lookup_key_not_found_warning(
 ) -> TransformWarning:
     """Create a T004 Lookup Key Not Found warning (for warn mode)."""
     return TransformWarning(
+        code=TransformErrorCodes.T004_LOOKUP_KEY_NOT_FOUND,
         message=f"Lookup key '{key}' not found in table '{table_name}'",
         path=field,
     )
@@ -125,6 +152,17 @@ def source_path_not_found_error(
 ) -> TransformError:
     """Create a T005 Source Path Not Found error."""
     return TransformError(
+        code=TransformErrorCodes.T005_SOURCE_PATH_NOT_FOUND,
+        message=f"Source path not found: {path}",
+        path=field,
+    )
+
+
+def source_path_not_found_warning(
+    path: str, field: str | None = None
+) -> TransformWarning:
+    """Create a T005 Source Path Not Found warning (for warn mode)."""
+    return TransformWarning(
         code=TransformErrorCodes.T005_SOURCE_PATH_NOT_FOUND,
         message=f"Source path not found: {path}",
         path=field,
