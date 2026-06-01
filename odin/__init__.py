@@ -61,6 +61,7 @@ __all__ = [
     # Main functions
     "parse",
     "parse_documents",
+    "collapse_chain",
     "loads",
     "dump",
     "dumps",
@@ -190,6 +191,37 @@ def parse_documents(
     if isinstance(text, bytes):
         text = text.decode("utf-8")
     return OdinParser().parse_documents(text, options)
+
+
+def collapse_chain(
+    input: Union[str, bytes, "list[OdinDocument]"],
+    options: Optional[ParseOptions] = None,
+) -> OdinDocument:
+    """Collapse a chained ODIN document into its computed current state.
+
+    Applies chaining overlay semantics across the chain: later documents
+    overlay earlier ones, a repeated path replaces the earlier value,
+    ``field = ~`` removes the field and its descendants, and ``field[] = ~``
+    clears the array. The result carries the final document's metadata.
+
+    Args:
+        input: Chained ODIN text (str/bytes) or a pre-parsed list of documents
+        options: Parse options (used when input is text)
+
+    Returns:
+        Document representing the computed current state
+
+    Example:
+        >>> current = odin.collapse_chain('{p}\\nname = "A"\\n\\n---\\n\\n{p}\\nname = "B"\\nold = ~')
+        >>> current.get('p.name').value
+        'B'
+    """
+    from odin.parsing.chain import collapse_chain as _collapse_chain
+    if isinstance(input, (str, bytes)):
+        docs = parse_documents(input, options)
+    else:
+        docs = input
+    return _collapse_chain(docs)
 
 
 def loads(

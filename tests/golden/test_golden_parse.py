@@ -155,6 +155,33 @@ def test_golden_parse(test_case):
     # Success tests
     expected = test_case.get("expected", {})
 
+    # Computed current state of a chain
+    if "currentState" in expected:
+        current = odin.collapse_chain(input_text)
+        cs = expected["currentState"]
+        for path, exp_val in cs.get("assignments", {}).items():
+            actual = current.get(path)
+            assert actual is not None, f"Missing path in current state: {path}"
+            assert_value_matches(actual, exp_val, path)
+        for key, exp_val in cs.get("metadata", {}).items():
+            actual = current.metadata.get(key)
+            if actual is None:
+                actual = current.get(f"$.{key}")
+            assert actual is not None, f"Missing current-state metadata key: {key}"
+            actual_raw = getattr(actual, "raw", None)
+            actual_val = actual_raw if actual_raw is not None else getattr(actual, "value", None)
+            assert str(actual_val) == str(exp_val), \
+                f"Current-state metadata mismatch at {key}: {actual_val!r} != {exp_val!r}"
+        for path in cs.get("absent", []):
+            if path.startswith("$."):
+                key = path[2:]
+                assert current.metadata.get(key) is None and current.get(path) is None, \
+                    f"Expected absent metadata in current state: {path}"
+            else:
+                assert current.get(path) is None, \
+                    f"Expected absent path in current state: {path}"
+        return
+
     # Multi-document tests use "documents" key
     if "documents" in expected:
         docs = odin.parse_documents(input_text)

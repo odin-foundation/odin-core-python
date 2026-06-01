@@ -133,6 +133,7 @@ def parse_value(tokens: List[Token], pos: int) -> Tuple[OdinValue, int]:
 
     # Time
     if tt == TokenType.TIME:
+        _validate_time_string(token)
         return OdinTime(token.value), 1
 
     # Duration
@@ -766,9 +767,132 @@ def _parse_date_value(token: Token) -> OdinDate:
     return OdinDate(value=d, raw=raw)
 
 
+_TIMESTAMP_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$"
+)
+_TIME_RE = re.compile(r"^T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$")
+_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def _validate_date_components(date_str: str, raw: str, token: Token) -> None:
+    """Validate a date string semantically (leap years, month boundaries)."""
+    m = _DATE_RE.match(date_str)
+    if not m:
+        raise ParseError(
+            f"Invalid date format: {raw}",
+            ParseErrorCodes.P001,
+            token.line,
+            token.column,
+        )
+    year = int(m.group(1))
+    month = int(m.group(2))
+    day = int(m.group(3))
+    if month < 1 or month > 12:
+        raise ParseError(
+            f"Invalid month {month}",
+            ParseErrorCodes.P001,
+            token.line,
+            token.column,
+        )
+    max_day = _DAYS_IN_MONTH[month]
+    if month == 2 and _is_leap_year(year):
+        max_day = 29
+    if day < 1 or day > max_day:
+        raise ParseError(
+            f"Invalid day {day} for month {month}",
+            ParseErrorCodes.P001,
+            token.line,
+            token.column,
+        )
+
+
+def _validate_time_components(
+    hour_str: str,
+    min_str: str,
+    sec_str: Optional[str],
+    raw: str,
+    token: Token,
+) -> None:
+    """Validate hour/minute/second bounds. Hour 24 only as end-of-day midnight; second 60 is a leap second."""
+    hour = int(hour_str)
+    minute = int(min_str)
+    second = int(sec_str) if sec_str is not None else 0
+
+    if hour == 24:
+        if minute != 0 or second != 0:
+            raise ParseError(
+                f"Invalid hour: {hour}",
+                ParseErrorCodes.P001,
+                token.line,
+                token.column,
+            )
+    elif hour > 23:
+        raise ParseError(
+            f"Invalid hour: {hour}",
+            ParseErrorCodes.P001,
+            token.line,
+            token.column,
+        )
+    if minute > 59:
+        raise ParseError(
+            f"Invalid minute: {minute}",
+            ParseErrorCodes.P001,
+            token.line,
+            token.column,
+        )
+    if second > 60:
+        raise ParseError(
+            f"Invalid second: {second}",
+            ParseErrorCodes.P001,
+            token.line,
+            token.column,
+        )
+
+
+def _validate_time_string(token: Token) -> None:
+    """Validate a time string semantically (THH:MM[:SS[.sss]])."""
+    raw = token.value
+    m = _TIME_RE.match(raw)
+    if not m:
+        raise ParseError(
+            f"Invalid time format: {raw}",
+            ParseErrorCodes.P001,
+            token.line,
+            token.column,
+        )
+    _validate_time_components(m.group(1), m.group(2), m.group(3), raw, token)
+
+
+def _validate_timestamp_string(token: Token) -> None:
+    """Validate a timestamp string semantically (date + time + offset)."""
+    raw = token.value
+    m = _TIMESTAMP_RE.match(raw)
+    if not m:
+        raise ParseError(
+            f"Invalid timestamp format: {raw}",
+            ParseErrorCodes.P001,
+            token.line,
+            token.column,
+        )
+    _validate_date_components(m.group(1), raw, token)
+    _validate_time_components(m.group(2), m.group(3), m.group(4), raw, token)
+    offset = m.group(5)
+    if offset and offset != "Z":
+        off_hour = int(offset[1:3])
+        off_min = int(offset[4:6])
+        if off_hour > 23 or off_min > 59:
+            raise ParseError(
+                f"Invalid timezone offset: {offset}",
+                ParseErrorCodes.P001,
+                token.line,
+                token.column,
+            )
+
+
 def _parse_timestamp_value(token: Token) -> OdinTimestamp:
     """Parse a timestamp token into OdinTimestamp."""
     raw = token.value
+    _validate_timestamp_string(token)
     # Store raw value, parse datetime best-effort
     try:
         # Handle leap seconds by clamping 60 -> 59
