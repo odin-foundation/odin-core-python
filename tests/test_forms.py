@@ -448,11 +448,4 @@ def test_top_level_exports():
 def open_fixture(name):
     from pathlib import Path
 
-    candidates = [
-        Path(__file__).parent.parent.parent / "golden" / "forms" / "fixtures" / name,
-        Path(__file__).parent.parent.parent / ".." / "golden" / "forms" / "fixtures" / name,
-    ]
-    for p in candidates:
-        if p.resolve().is_file():
-            return p.read_text(encoding="utf-8")
-    raise RuntimeError(f"fixture not found: {name}")
+    return (Path(__file__).parent / "forms_fixtures" / name).read_text(encoding="utf-8")
