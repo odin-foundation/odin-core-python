@@ -16,7 +16,7 @@ NANOID_DEFAULT_SIZE = 21
 
 
 def _js_signed_rshift(val: int, shift: int) -> int:
-    """Emulate JavaScript's signed 32-bit right shift (>>)."""
+    """Emulate signed 32-bit right shift (>>)."""
     if val & 0x80000000:
         # Negative in signed 32-bit: sign-extend then shift
         val = val - 0x100000000
@@ -24,7 +24,7 @@ def _js_signed_rshift(val: int, shift: int) -> int:
 
 
 def _generate_seeded_uuid(seed: str) -> str:
-    """Generate deterministic UUID using two DJB2 hashes, matching TypeScript exactly."""
+    """Generate deterministic UUID using two DJB2 hashes."""
     hash1 = 5381
     hash2 = 52711
     for ch in seed:

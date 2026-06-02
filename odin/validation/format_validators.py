@@ -482,7 +482,7 @@ def get_format_validator(name: str) -> Optional[Callable[[str], bool]]:
 def validate(value: str, fmt: str) -> bool:
     """Validate *value* against the named *fmt*.
 
-    Matches Java ``FormatValidators.validate`` semantics:
+    Semantics:
     - Empty/null values always pass.
     - Unknown format names always pass.
     - ``date-iso`` validates ISO 8601 date format (YYYY-MM-DD).
@@ -492,7 +492,7 @@ def validate(value: str, fmt: str) -> bool:
     if not fmt:
         return True
 
-    # Validate ISO date format (YYYY-MM-DD) matching TypeScript pattern
+    # Validate ISO date format (YYYY-MM-DD)
     if fmt == "date-iso":
         return bool(re.match(r'^\d{4}-\d{2}-\d{2}$', value))
 

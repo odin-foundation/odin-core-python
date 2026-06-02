@@ -493,7 +493,7 @@ def verb_row_number(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def _string_to_seed(s: str) -> int:
-    """DJB2 hash starting at 0, matching TypeScript/Rust stringToSeed."""
+    """DJB2 hash starting at 0."""
     h = 0
     for ch in s:
         h = ((h << 5) - h + ord(ch)) & 0xFFFFFFFF
@@ -501,7 +501,7 @@ def _string_to_seed(s: str) -> int:
 
 
 class _Mulberry32:
-    """Seeded 32-bit PRNG (Mulberry32), matching TypeScript/Rust."""
+    """Seeded 32-bit PRNG (Mulberry32)."""
 
     def __init__(self, seed: int) -> None:
         self._state = seed & 0xFFFFFFFF

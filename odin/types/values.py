@@ -71,13 +71,13 @@ class OdinTimestamp:
 
 @dataclass(frozen=True, slots=True)
 class OdinTime:
-    """Time value (stored as string like TS)."""
+    """Time value (stored as string)."""
     value: str
 
 
 @dataclass(frozen=True, slots=True)
 class OdinDuration:
-    """Duration value (stored as string like TS)."""
+    """Duration value (stored as string)."""
     value: str
 
 

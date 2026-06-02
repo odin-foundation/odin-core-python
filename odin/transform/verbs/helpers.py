@@ -75,7 +75,7 @@ def coerce_bool(v: DynValue) -> bool:
 
 
 def is_truthy(v: DynValue) -> bool:
-    """Check if a DynValue is truthy (matches TS/Java behavior)."""
+    """Check if a DynValue is truthy."""
     if v.is_null():
         return False
     if v.type == DynType.BOOL:
@@ -121,7 +121,7 @@ def numeric_result(v: float) -> DynValue:
 
 
 def dyn_values_equal(a: DynValue, b: DynValue) -> bool:
-    """Cross-type equality comparison (matches Java/TS behavior)."""
+    """Cross-type equality comparison."""
     if a.type == b.type:
         if a.type == DynType.NULL:
             return True

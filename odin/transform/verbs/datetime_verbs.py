@@ -16,7 +16,7 @@ from odin.utils.date_utils import (
 
 
 def _parse_dt(s: str) -> Optional[datetime]:
-    """Parse a date/time string to datetime (matches Java parseDt)."""
+    """Parse a date/time string to datetime."""
     return parse_iso_timestamp(s)
 
 
@@ -341,7 +341,7 @@ def verb_end_of_year(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_day_of_week(args: List[DynValue], ctx: object) -> DynValue:
-    """Returns day of week: 0=Sunday, 1=Monday, ..., 6=Saturday (matches .NET/Java)."""
+    """Returns day of week: 0=Sunday, 1=Monday, ..., 6=Saturday."""
     if len(args) < 1:
         return DynValue.of_null()
     dt = _parse_date_val(args[0])

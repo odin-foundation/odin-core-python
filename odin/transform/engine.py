@@ -2334,7 +2334,7 @@ def _coerce_type_with_context(
     decimals: Optional[int] = None,
 ) -> DynValue:
     """Coerce a DynValue to a specific type with additional context."""
-    # Null values pass through unchanged (matches TypeScript reference)
+    # Null values pass through unchanged
     if value.is_null():
         return value
     if type_name == "currency":
@@ -2415,10 +2415,10 @@ def _coerce_type_with_context(
 def _coerce_type(value: DynValue, type_name: str) -> DynValue:
     """Coerce a DynValue to a specific type.
 
-    Null values are preserved (returned as-is) to match TypeScript behavior.
+    Null values are preserved (returned as-is).
     Type coercion only applies to non-null values.
     """
-    # Null values pass through unchanged (matches TypeScript reference)
+    # Null values pass through unchanged
     if value.is_null():
         return value
     if type_name == "string":
