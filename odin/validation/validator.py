@@ -56,7 +56,8 @@ from odin.validation.validate_schema_def import validate_schema_definition
 class _SchemaMemo:
     """Cached schema-only validation results, independent of any document."""
 
-    __slots__ = ("type_registry", "ref_errors", "def_errors", "base_fields")
+    __slots__ = ("type_registry", "ref_errors", "def_errors", "base_fields",
+                 "composition_fields")
 
     def __init__(
         self,
@@ -64,11 +65,15 @@ class _SchemaMemo:
         ref_errors: List[ValidationError],
         def_errors: List[ValidationError],
         base_fields: Dict[str, SchemaField],
+        composition_fields: List[tuple],
     ) -> None:
         self.type_registry = type_registry
         self.ref_errors = ref_errors      # schema-level V012/V013
         self.def_errors = def_errors      # V017
         self.base_fields = base_fields    # composition passes 1 and 2
+        # (path, field) entries whose type is a composition; empty for
+        # composition-free schemas so the third pass can be skipped wholesale.
+        self.composition_fields = composition_fields
 
 
 # Schema instances are unhashable (non-frozen dataclass), so the memo is stashed
@@ -96,7 +101,16 @@ def _get_schema_memo(
 
     base_fields = _expand_base_compositions(schema, type_registry)
 
-    memo = _SchemaMemo(type_registry, ref_errors, def_errors, base_fields)
+    # Precompute composition (typeRef/reference) fields once; composition-free
+    # schemas then skip the per-document third pass and base-map copy entirely.
+    composition_fields = [
+        (path, fld)
+        for path, fld in base_fields.items()
+        if not path.endswith("._composition")
+        and isinstance(fld.field_type, (TypeRefType, ReferenceType))
+    ]
+
+    memo = _SchemaMemo(type_registry, ref_errors, def_errors, base_fields, composition_fields)
     try:
         object.__setattr__(schema, _SCHEMA_MEMO_ATTR, memo)
     except (AttributeError, TypeError):
@@ -156,7 +170,8 @@ def validate(
     # Expand type compositions and field-level type references into concrete
     # fields (e.g. customer._composition: @a & @b -> customer.<fields>).
     expanded_fields = _expand_type_compositions(
-        doc, schema, type_registry, base_fields=memo.base_fields
+        doc, schema, type_registry, base_fields=memo.base_fields,
+        composition_fields=memo.composition_fields,
     )
 
     # ------------------------------------------------------------------
@@ -976,6 +991,7 @@ def _expand_type_compositions(
     schema: OdinSchema,
     type_registry: Optional[Dict[str, Any]] = None,
     base_fields: Optional[Dict[str, SchemaField]] = None,
+    composition_fields: Optional[List[tuple]] = None,
 ) -> Dict[str, SchemaField]:
     """Expand object compositions and field-level type references into fields.
 
@@ -984,18 +1000,36 @@ def _expand_type_compositions(
     - A field typed `@SomeType` enforces that type's fields under the field path
       when the sub-object is present or the field is required.
 
-    The schema-only base map (passes 1 and 2) may be supplied precomputed; the
-    third pass depends on the document and always runs here.
+    The schema-only base map (passes 1 and 2) may be supplied precomputed. When
+    it is, the third (document-dependent) pass only inspects the precomputed
+    composition fields and copies the base map lazily — composition-free schemas
+    and documents with no present compositions return the base map untouched.
     """
     if base_fields is None:
+        # No precomputed base: expand from scratch and mutate the fresh map.
         result = _expand_base_compositions(schema, type_registry)
+        candidates = [
+            (path, fld)
+            for path, fld in list(result.items())
+            if not path.endswith("._composition")
+            and isinstance(fld.field_type, (TypeRefType, ReferenceType))
+        ]
     else:
-        result = dict(base_fields)
+        if composition_fields is None:
+            candidates = [
+                (path, fld)
+                for path, fld in base_fields.items()
+                if not path.endswith("._composition")
+                and isinstance(fld.field_type, (TypeRefType, ReferenceType))
+            ]
+        else:
+            candidates = composition_fields
+        if not candidates:
+            return base_fields  # composition-free schema: no copy
+        result = None  # copy lazily on first present composition
 
     # Third pass: a field typed @SomeType enforces the referenced type's fields.
-    for path, fld in list(result.items()):
-        if path.endswith("._composition"):
-            continue
+    for path, fld in candidates:
         ref_name = None
         if isinstance(fld.field_type, TypeRefType):
             ref_name = fld.field_type.name
@@ -1012,6 +1046,8 @@ def _expand_type_compositions(
         if not _object_present(doc, path) and not fld.required:
             continue
 
+        if result is None:
+            result = dict(base_fields)
         for type_def in type_defs:
             for field_name, type_field in type_def.fields.items():
                 if field_name == "_composition":
@@ -1020,6 +1056,8 @@ def _expand_type_compositions(
                 if full not in result:
                     result[full] = _rebind(type_field, full)
 
+    if result is None:
+        return base_fields if base_fields is not None else {}
     return result
 
 
