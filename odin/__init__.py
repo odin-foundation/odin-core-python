@@ -131,6 +131,13 @@ __all__ = [
     # Transform
     "parse_transform",
     "execute_transform",
+    # Forms
+    "parse_form",
+    "render_form",
+    "generate_form_css",
+    "generate_print_css",
+    "to_pixels",
+    "from_pixels",
 ]
 
 
@@ -613,3 +620,62 @@ def execute_transform(transform_def, source, options=None):
 
     engine = TransformEngine(create_default_registry(), import_resolver=import_resolver)
     return engine.execute(transform_def, source)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Forms
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def parse_form(text: Union[str, bytes]):
+    """Parse an ODIN forms document into a typed OdinForm.
+
+    Args:
+        text: ODIN forms text as string or UTF-8 bytes
+
+    Returns:
+        Parsed OdinForm with metadata, page defaults, pages, and templates
+    """
+    from odin.forms.parser import parse_form as _parse_form
+    if isinstance(text, bytes):
+        text = text.decode("utf-8")
+    return _parse_form(text)
+
+
+def render_form(form, data=None, options=None) -> str:
+    """Render a parsed OdinForm to an HTML string.
+
+    Args:
+        form: Parsed OdinForm
+        data: Optional ODIN document for data binding
+        options: Optional RenderFormOptions
+
+    Returns:
+        Complete HTML string
+    """
+    from odin.forms.renderer import render_form as _render_form
+    return _render_form(form, data, options)
+
+
+def generate_form_css() -> str:
+    """Return the base CSS stylesheet for the form renderer."""
+    from odin.forms.css import generate_form_css as _gen
+    return _gen()
+
+
+def generate_print_css() -> str:
+    """Return the print CSS block for the form renderer."""
+    from odin.forms.css import generate_print_css as _gen
+    return _gen()
+
+
+def to_pixels(value: float, unit: str) -> float:
+    """Convert a measurement in the given unit to pixels."""
+    from odin.forms.units import to_pixels as _to_pixels
+    return _to_pixels(value, unit)
+
+
+def from_pixels(px: float, unit: str) -> float:
+    """Convert a pixel measurement back to the given unit."""
+    from odin.forms.units import from_pixels as _from_pixels
+    return _from_pixels(px, unit)
