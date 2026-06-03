@@ -342,10 +342,15 @@ def test_is_date_timestamp():
     assert invoke("isDate", dv).as_bool() is True
 
 def test_is_date_string_valid():
-    assert invoke("isDate", "2024-01-15").as_bool() is True
+    from datetime import date
+    assert invoke("isDate", DynValue.of_date(date(2024, 1, 15))).as_bool() is True
 
 def test_is_date_invalid():
     assert invoke("isDate", "not a date").as_bool() is False
+
+def test_is_date_string_is_false():
+    # A plain string is not a date type
+    assert invoke("isDate", "2024-01-15").as_bool() is False
 
 def test_is_date_no_args():
     assert invoke("isDate").is_null()

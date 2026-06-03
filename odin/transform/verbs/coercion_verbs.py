@@ -7,7 +7,7 @@ import re
 from typing import List
 
 from odin.transform.dyn_value import DynValue, DynType
-from odin.transform.verbs.helpers import coerce_str, coerce_num, is_truthy, numeric_result
+from odin.transform.verbs.helpers import coerce_str, coerce_num, is_truthy, numeric_result, to_number, to_boolean
 
 
 def verb_coerce_string(args: List[DynValue], ctx: object) -> DynValue:
@@ -21,43 +21,19 @@ def verb_coerce_string(args: List[DynValue], ctx: object) -> DynValue:
 def verb_coerce_number(args: List[DynValue], ctx: object) -> DynValue:
     if not args:
         return DynValue.of_null()
-    if args[0].is_null():
-        return DynValue.of_null()
-    n = coerce_num(args[0])
-    if n is None:
-        return DynValue.of_null()
-    return numeric_result(n)
+    return numeric_result(to_number(args[0]))
 
 
 def verb_coerce_integer(args: List[DynValue], ctx: object) -> DynValue:
     if not args:
         return DynValue.of_null()
-    if args[0].is_null():
-        return DynValue.of_null()
-    n = coerce_num(args[0])
-    if n is None:
-        return DynValue.of_null()
-    return DynValue.of_integer(int(n))
+    return DynValue.of_integer(int(math.floor(to_number(args[0]))))
 
 
 def verb_coerce_boolean(args: List[DynValue], ctx: object) -> DynValue:
     if not args:
         return DynValue.of_null()
-    v = args[0]
-    if v.is_null():
-        return DynValue.of_null()
-    if v.type == DynType.BOOL:
-        return v
-    if v.type == DynType.INTEGER:
-        return DynValue.of_bool(v._int_value != 0)
-    if v.type in (DynType.FLOAT, DynType.CURRENCY, DynType.PERCENT):
-        return DynValue.of_bool(v._float_value != 0.0)
-    if v.type == DynType.STRING:
-        s = (v._string_value or "").strip().lower()
-        if s in ("false", "0", "no", "n", "off", ""):
-            return DynValue.of_bool(False)
-        return DynValue.of_bool(True)
-    return DynValue.of_bool(is_truthy(v))
+    return DynValue.of_bool(to_boolean(args[0]))
 
 
 def verb_coerce_date(args: List[DynValue], ctx: object) -> DynValue:
@@ -86,6 +62,30 @@ def verb_coerce_date(args: List[DynValue], ctx: object) -> DynValue:
         dv = DynValue(DynType.DATE)
         dv._string_value = s[:10]
         return dv
+
+    # Compact format YYYYMMDD
+    m = re.match(r"^(\d{4})(\d{2})(\d{2})$", s)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _valid_ymd(y, mo, d):
+            dv = DynValue(DynType.DATE)
+            dv._string_value = f"{y:04d}-{mo:02d}-{d:02d}"
+            return dv
+        return DynValue.of_null()
+
+    # Slash format MM/DD/YYYY (US) or DD/MM/YYYY when first > 12
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m:
+        first, second, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if first > 12:
+            d, mo = first, second
+        else:
+            mo, d = first, second
+        if _valid_ymd(y, mo, d):
+            dv = DynValue(DynType.DATE)
+            dv._string_value = f"{y:04d}-{mo:02d}-{d:02d}"
+            return dv
+        return DynValue.of_null()
 
     # Try numeric (epoch seconds)
     try:
@@ -225,6 +225,16 @@ def verb_to_object(args: List[DynValue], ctx: object) -> DynValue:
         if result:
             return DynValue.of_object(result)
     return DynValue.of_null()
+
+
+def _valid_ymd(y: int, mo: int, d: int) -> bool:
+    if mo < 1 or mo > 12 or d < 1:
+        return False
+    from calendar import monthrange
+    try:
+        return d <= monthrange(y, mo)[1]
+    except ValueError:
+        return False
 
 
 def _is_valid_date_prefix(s: str) -> bool:

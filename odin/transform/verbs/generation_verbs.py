@@ -53,10 +53,10 @@ def verb_uuid(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_sequence(args: List[DynValue], ctx: object) -> DynValue:
+    if not args:
+        return DynValue.of_integer(1)
     accumulators = getattr(ctx, "accumulators", {})
-    name = "default"
-    if args and not args[0].is_null():
-        name = coerce_str(args[0])
+    name = coerce_str(args[0])
     seq_key = f"__seq_{name}"
 
     start = 1
@@ -66,12 +66,11 @@ def verb_sequence(args: List[DynValue], ctx: object) -> DynValue:
             start = int(sv)
 
     if seq_key not in accumulators:
-        accumulators[seq_key] = DynValue.of_integer(start)
-
-    current = accumulators[seq_key]
-    val = current.as_int()
-    accumulators[seq_key] = DynValue.of_integer(val + 1)
-    return DynValue.of_integer(val)
+        current = start
+    else:
+        current = accumulators[seq_key].as_int() + 1
+    accumulators[seq_key] = DynValue.of_integer(current)
+    return DynValue.of_integer(current)
 
 
 def verb_reset_sequence(args: List[DynValue], ctx: object) -> DynValue:

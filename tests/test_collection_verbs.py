@@ -196,23 +196,27 @@ class TestFilter:
 
 class TestEverySome:
     def test_every_true(self):
-        r = invoke("every", [1, 2, 3])
+        items = [{"status": "active"}, {"status": "active"}]
+        r = invoke("every", items, "status", "=", "active")
         assert r._bool_value is True
 
     def test_every_false(self):
-        r = invoke("every", [1, 0, 3])
+        items = [{"status": "active"}, {"status": "closed"}]
+        r = invoke("every", items, "status", "=", "active")
         assert r._bool_value is False
 
     def test_every_empty(self):
-        r = invoke("every", [])
+        r = invoke("every", [], "status", "=", "active")
         assert r._bool_value is True
 
     def test_some_true(self):
-        r = invoke("some", [0, 0, 1])
+        items = [{"status": "closed"}, {"status": "active"}]
+        r = invoke("some", items, "status", "=", "active")
         assert r._bool_value is True
 
     def test_some_false(self):
-        r = invoke("some", [0, 0, 0])
+        items = [{"status": "closed"}, {"status": "closed"}]
+        r = invoke("some", items, "status", "=", "active")
         assert r._bool_value is False
 
 

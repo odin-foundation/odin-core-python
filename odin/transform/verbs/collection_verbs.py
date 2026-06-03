@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 from typing import List, Optional
 
 from odin.transform.dyn_value import DynValue, DynType
 from odin.transform.verbs.helpers import (
     coerce_num, coerce_str, dyn_values_equal, is_truthy, numeric_result,
-    to_f64_for_cmp,
+    to_f64_for_cmp, to_number,
 )
 
 _POLLUTION_KEYS = frozenset({"__proto__", "constructor", "prototype"})
@@ -39,6 +40,18 @@ def _extract_array(v: DynValue) -> List[DynValue]:
                 from odin.transform.source_parsers.json_parser import parse_json
                 return list(parse_json(_sanitize_json(parsed)).as_array())
     return []
+
+
+def _resolve_array(v: DynValue):
+    """Return a list for array-like input, or None when not an array."""
+    if v.is_array():
+        return list(v.as_array())
+    if v.is_string():
+        s = v.as_string().strip()
+        if s.startswith("[") and s.endswith("]"):
+            arr = _extract_array(v)
+            return arr
+    return None
 
 
 def _get_field(item: DynValue, field: str) -> DynValue:
@@ -278,25 +291,35 @@ def verb_reverse(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_every(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
+    if len(args) < 4:
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    if len(arr) == 0:
         return DynValue.of_bool(True)
-    arr = _extract_array(args[0])
-    field = coerce_str(args[1]) if len(args) >= 2 else ""
+    field = coerce_str(args[1])
+    op = coerce_str(args[2])
+    cmp = args[3]
     for item in arr:
-        val = _get_field(item, field) if field else item
-        if not is_truthy(val):
+        if not _check_filter_condition(_get_field(item, field), op, cmp):
             return DynValue.of_bool(False)
     return DynValue.of_bool(True)
 
 
 def verb_some(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
+    if len(args) < 4:
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    if len(arr) == 0:
         return DynValue.of_bool(False)
-    arr = _extract_array(args[0])
-    field = coerce_str(args[1]) if len(args) >= 2 else ""
+    field = coerce_str(args[1])
+    op = coerce_str(args[2])
+    cmp = args[3]
     for item in arr:
-        val = _get_field(item, field) if field else item
-        if is_truthy(val):
+        if _check_filter_condition(_get_field(item, field), op, cmp):
             return DynValue.of_bool(True)
     return DynValue.of_bool(False)
 
@@ -339,18 +362,23 @@ def verb_includes(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_concat_arrays(args: List[DynValue], ctx: object) -> DynValue:
-    result: List[DynValue] = []
-    for arg in args:
-        if arg.is_array():
-            result.extend(arg.as_array())
+    if len(args) < 2:
+        return DynValue.of_null()
+    a = _resolve_array(args[0])
+    b = _resolve_array(args[1])
+    if a is None and b is None:
+        return DynValue.of_null()
+    result: List[DynValue] = list(a or []) + list(b or [])
     return DynValue.of_array(result)
 
 
 def verb_zip(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 2:
         return DynValue.of_null()
-    a = _extract_array(args[0])
-    b = _extract_array(args[1])
+    a = _resolve_array(args[0])
+    b = _resolve_array(args[1])
+    if a is None or b is None:
+        return DynValue.of_null()
     min_len = min(len(a), len(b))
     result: List[DynValue] = []
     for i in range(min_len):
@@ -399,30 +427,36 @@ def verb_partition(args: List[DynValue], ctx: object) -> DynValue:
 
 def verb_take(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 2:
-        return DynValue.of_array([])
-    arr = _extract_array(args[0])
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
     n = coerce_num(args[1])
-    if n is None:
-        return DynValue.of_array([])
-    count = max(0, min(int(n), len(arr)))
+    count = int(math.floor(n)) if n is not None else 0
+    if count < 0:
+        return DynValue.of_null()
     return DynValue.of_array(arr[:count])
 
 
 def verb_drop(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 2:
-        return DynValue.of_array([])
-    arr = _extract_array(args[0])
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
     n = coerce_num(args[1])
-    if n is None:
-        return DynValue.of_array([])
-    count = max(0, min(int(n), len(arr)))
+    count = int(math.floor(n)) if n is not None else 0
+    if count < 0:
+        return DynValue.of_null()
     return DynValue.of_array(arr[count:])
 
 
 def verb_chunk(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 2:
         return DynValue.of_null()
-    arr = _extract_array(args[0])
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
     size_num = coerce_num(args[1])
     if size_num is None or size_num <= 0:
         return DynValue.of_null()
@@ -471,7 +505,9 @@ def verb_range(args: List[DynValue], ctx: object) -> DynValue:
 def verb_compact(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
         return DynValue.of_null()
-    arr = _extract_array(args[0])
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
     result = [item for item in arr if not item.is_null() and not (item.is_string() and not item._string_value)]
     return DynValue.of_array(result)
 
@@ -544,7 +580,9 @@ def verb_limit(args: List[DynValue], ctx: object) -> DynValue:
 def verb_dedupe(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 2:
         return DynValue.of_null()
-    arr = _extract_array(args[0])
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
     key_field = coerce_str(args[1])
     seen: set = set()
     result: List[DynValue] = []
@@ -565,8 +603,10 @@ def verb_dedupe(args: List[DynValue], ctx: object) -> DynValue:
 
 def verb_cumsum(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
-        return DynValue.of_array([])
-    arr = _extract_array(args[0])
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
     result: List[DynValue] = []
     running = 0.0
     for item in arr:
@@ -581,8 +621,10 @@ def verb_cumsum(args: List[DynValue], ctx: object) -> DynValue:
 
 def verb_cumprod(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
-        return DynValue.of_array([])
-    arr = _extract_array(args[0])
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
     result: List[DynValue] = []
     running = 1.0
     for item in arr:
@@ -597,15 +639,22 @@ def verb_cumprod(args: List[DynValue], ctx: object) -> DynValue:
 
 def verb_diff(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
-        return DynValue.of_array([])
-    arr = _extract_array(args[0])
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    periods = 1
+    if len(args) >= 2:
+        p = coerce_num(args[1])
+        if p is not None:
+            periods = max(1, int(p))
     result: List[DynValue] = []
     for i, item in enumerate(arr):
-        if i == 0:
+        if i < periods:
             result.append(DynValue.of_null())
             continue
         curr = coerce_num(item)
-        prev = coerce_num(arr[i - 1])
+        prev = coerce_num(arr[i - periods])
         if curr is None or prev is None:
             result.append(DynValue.of_null())
         else:
@@ -615,64 +664,88 @@ def verb_diff(args: List[DynValue], ctx: object) -> DynValue:
 
 def verb_pct_change(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
-        return DynValue.of_array([])
-    arr = _extract_array(args[0])
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    periods = 1
+    if len(args) >= 2:
+        p = coerce_num(args[1])
+        if p is not None:
+            periods = max(1, int(p))
     result: List[DynValue] = []
     for i, item in enumerate(arr):
-        if i == 0:
+        if i < periods:
             result.append(DynValue.of_null())
             continue
         curr = coerce_num(item)
-        prev = coerce_num(arr[i - 1])
+        prev = coerce_num(arr[i - periods])
         if curr is None or prev is None or prev == 0:
             result.append(DynValue.of_null())
         else:
-            result.append(DynValue.of_float((curr - prev) / prev))
+            result.append(numeric_result((curr - prev) / prev))
     return DynValue.of_array(result)
 
 
 def verb_shift(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
-        return DynValue.of_array([])
-    arr = _extract_array(args[0])
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
     n = 1
     if len(args) >= 2:
         n_val = coerce_num(args[1])
         if n_val is not None:
             n = int(n_val)
-    if n == 0 or not arr:
-        return DynValue.of_array(list(arr))
+    fill = args[2] if len(args) >= 3 else DynValue.of_null()
+    length = len(arr)
     result: List[DynValue] = []
-    if n > 0:
-        result = [DynValue.of_null()] * min(n, len(arr)) + arr[:max(0, len(arr) - n)]
+    if n >= 0:
+        for i in range(length):
+            result.append(fill if i < n else arr[i - n])
     else:
-        skip = min(-n, len(arr))
-        result = arr[skip:] + [DynValue.of_null()] * min(-n, len(arr))
+        absn = -n
+        for i in range(length):
+            result.append(fill if i >= length - absn else arr[i + absn])
     return DynValue.of_array(result)
 
 
 def verb_lag(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
-        return DynValue.of_array([])
-    arr_arg = args[0]
-    n = 1
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    periods = 1
     if len(args) >= 2:
-        n_val = coerce_num(args[1])
-        if n_val is not None:
-            n = int(n_val)
-    return verb_shift([arr_arg, DynValue.of_integer(n)], ctx)
+        p = coerce_num(args[1])
+        if p is not None:
+            periods = max(1, int(p))
+    default = args[2] if len(args) >= 3 else DynValue.of_null()
+    result: List[DynValue] = []
+    for i in range(len(arr)):
+        result.append(default if i < periods else arr[i - periods])
+    return DynValue.of_array(result)
 
 
 def verb_lead(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
-        return DynValue.of_array([])
-    arr_arg = args[0]
-    n = 1
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    periods = 1
     if len(args) >= 2:
-        n_val = coerce_num(args[1])
-        if n_val is not None:
-            n = int(n_val)
-    return verb_shift([arr_arg, DynValue.of_integer(-n)], ctx)
+        p = coerce_num(args[1])
+        if p is not None:
+            periods = max(1, int(p))
+    default = args[2] if len(args) >= 3 else DynValue.of_null()
+    result: List[DynValue] = []
+    length = len(arr)
+    for i in range(length):
+        result.append(default if i >= length - periods else arr[i + periods])
+    return DynValue.of_array(result)
 
 
 def verb_rank(args: List[DynValue], ctx: object) -> DynValue:
@@ -852,3 +925,227 @@ def verb_unpivot(args: List[DynValue], ctx: object) -> DynValue:
         result.append(DynValue.of_object(row))
 
     return DynValue.of_array(result)
+
+
+# ── Set operations / reshaping ──────────────────────────────────────────────────
+
+_UNSAFE_KEYS = frozenset({"__proto__", "constructor", "prototype"})
+
+
+def _value_key(item: DynValue) -> str:
+    """Canonical equality key for set operations."""
+    n = to_f64_for_cmp(item) if item.is_number() else None
+    if n is not None:
+        return f"n:{n}"
+    if item.is_bool():
+        return f"b:{item._bool_value}"
+    if item.is_null():
+        return "null"
+    return f"s:{coerce_str(item)}"
+
+
+def _is_safe_key(key: str) -> bool:
+    return key.lower() not in _UNSAFE_KEYS
+
+
+def verb_intersection(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_array([])
+    a = _resolve_array(args[0])
+    b = _resolve_array(args[1])
+    if a is None or b is None:
+        return DynValue.of_array([])
+    b_keys = {_value_key(x) for x in b}
+    seen: set = set()
+    result: List[DynValue] = []
+    for item in a:
+        k = _value_key(item)
+        if k in b_keys and k not in seen:
+            seen.add(k)
+            result.append(item)
+    return DynValue.of_array(result)
+
+
+def verb_union(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_array([])
+    a = _resolve_array(args[0]) or []
+    b = _resolve_array(args[1]) or []
+    seen: set = set()
+    result: List[DynValue] = []
+    for item in list(a) + list(b):
+        k = _value_key(item)
+        if k not in seen:
+            seen.add(k)
+            result.append(item)
+    return DynValue.of_array(result)
+
+
+def verb_difference(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_array([])
+    a = _resolve_array(args[0])
+    if a is None:
+        return DynValue.of_array([])
+    b_keys = {_value_key(x) for x in (_resolve_array(args[1]) or [])}
+    seen: set = set()
+    result: List[DynValue] = []
+    for item in a:
+        k = _value_key(item)
+        if k not in b_keys and k not in seen:
+            seen.add(k)
+            result.append(item)
+    return DynValue.of_array(result)
+
+
+def verb_symmetric_difference(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_array([])
+    a = _resolve_array(args[0]) or []
+    b = _resolve_array(args[1]) or []
+    a_keys = {_value_key(x) for x in a}
+    b_keys = {_value_key(x) for x in b}
+    seen: set = set()
+    result: List[DynValue] = []
+    for item in a:
+        k = _value_key(item)
+        if k not in b_keys and k not in seen:
+            seen.add(k)
+            result.append(item)
+    for item in b:
+        k = _value_key(item)
+        if k not in a_keys and k not in seen:
+            seen.add(k)
+            result.append(item)
+    return DynValue.of_array(result)
+
+
+def verb_count_by(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 1:
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    field = coerce_str(args[1]) if len(args) >= 2 else None
+    counts: dict = {}
+    for item in arr:
+        v = _get_field(item, field) if field else item
+        key = coerce_str(v)
+        counts[key] = counts.get(key, 0) + 1
+    result: dict = {}
+    for key in sorted(counts.keys()):
+        if _is_safe_key(key):
+            result[key] = DynValue.of_integer(counts[key])
+    return DynValue.of_object(result)
+
+
+def verb_key_by(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    field = coerce_str(args[1])
+    result: dict = {}
+    for item in arr:
+        key = coerce_str(_get_field(item, field))
+        if _is_safe_key(key):
+            result[key] = item
+    return DynValue.of_object(result)
+
+
+def verb_explode(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_array([])
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_array([])
+    field = coerce_str(args[1])
+    result: List[DynValue] = []
+    for item in arr:
+        if not item.is_object():
+            result.append(item)
+            continue
+        base = dict(item.as_object())
+        field_val = base.get(field)
+        elements = list(field_val.as_array()) if field_val is not None and field_val.is_array() else None
+        if not elements:
+            new_obj = dict(base)
+            new_obj.pop(field, None)
+            result.append(DynValue.of_object(new_obj))
+            continue
+        for el in elements:
+            new_obj = dict(base)
+            new_obj[field] = el
+            result.append(DynValue.of_object(new_obj))
+    return DynValue.of_array(result)
+
+
+def verb_window(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_array([])
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_array([])
+    n_val = coerce_num(args[1])
+    n = int(math.floor(n_val)) if n_val is not None else 0
+    if n <= 0 or len(arr) < n:
+        return DynValue.of_array([])
+    result: List[DynValue] = []
+    for i in range(len(arr) - n + 1):
+        result.append(DynValue.of_array(arr[i:i + n]))
+    return DynValue.of_array(result)
+
+
+def verb_count_if(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 4:
+        return DynValue.of_integer(0)
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_integer(0)
+    field = coerce_str(args[1])
+    op = coerce_str(args[2])
+    cmp = args[3]
+    count = 0
+    for item in arr:
+        if _check_filter_condition(_get_field(item, field), op, cmp):
+            count += 1
+    return DynValue.of_integer(count)
+
+
+def verb_sum_if(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 4:
+        return DynValue.of_integer(0)
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_integer(0)
+    field = coerce_str(args[1])
+    op = coerce_str(args[2])
+    cmp = args[3]
+    sum_field = coerce_str(args[4]) if len(args) >= 5 else field
+    total = 0.0
+    for item in arr:
+        if _check_filter_condition(_get_field(item, field), op, cmp):
+            total += to_number(_get_field(item, sum_field))
+    return numeric_result(total)
+
+
+def verb_avg_if(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 4:
+        return DynValue.of_null()
+    arr = _resolve_array(args[0])
+    if arr is None:
+        return DynValue.of_null()
+    field = coerce_str(args[1])
+    op = coerce_str(args[2])
+    cmp = args[3]
+    avg_field = coerce_str(args[4]) if len(args) >= 5 else field
+    total = 0.0
+    count = 0
+    for item in arr:
+        if _check_filter_condition(_get_field(item, field), op, cmp):
+            total += to_number(_get_field(item, avg_field))
+            count += 1
+    if count == 0:
+        return DynValue.of_null()
+    return numeric_result(total / count)

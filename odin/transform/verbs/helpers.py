@@ -61,6 +61,28 @@ def coerce_num(v: DynValue) -> Optional[float]:
     return None
 
 
+def to_number(v: DynValue) -> float:
+    """Convert a DynValue to a float, treating null and unparseable as 0."""
+    n = coerce_num(v)
+    return n if n is not None else 0.0
+
+
+def to_boolean(v: DynValue) -> bool:
+    """Convert a DynValue to bool using strict string semantics."""
+    if v.type == DynType.STRING:
+        s = (v._string_value or "").lower()
+        return s in ("true", "yes", "y", "1")
+    if v.is_null():
+        return False
+    if v.type == DynType.INTEGER:
+        return v._int_value != 0
+    if v.type in (DynType.FLOAT, DynType.CURRENCY, DynType.PERCENT):
+        return v._float_value != 0.0
+    if v.type == DynType.BOOL:
+        return v._bool_value
+    return is_truthy(v)
+
+
 def coerce_int(v: DynValue) -> Optional[int]:
     """Convert a DynValue to an int, or None."""
     n = coerce_num(v)
@@ -191,32 +213,13 @@ def _format_double(v: float) -> str:
 
 
 def split_words(s: str) -> List[str]:
-    """Split a string into words, handling camelCase, snake_case, kebab-case, spaces."""
+    """Split a string into words by delimiters and case boundaries."""
     if not s:
         return []
-    # First split on explicit separators
-    parts = re.split(r'[_\- ]+', s)
-    words: List[str] = []
-    for part in parts:
-        if not part:
-            continue
-        # Check if this part is all uppercase (no lowercase letters)
-        alpha_chars = [c for c in part if c.isalpha()]
-        if alpha_chars and all(c.isupper() for c in alpha_chars):
-            # All-caps: split each character as a separate word
-            for ch in part:
-                if ch.isalpha() or ch.isdigit():
-                    words.append(ch)
-        else:
-            # Mixed case: use camelCase boundary detection
-            result = ""
-            for i, ch in enumerate(part):
-                if ch.isupper() and i > 0:
-                    prev = part[i - 1]
-                    if prev.islower() or prev.isdigit():
-                        result += " "
-                    elif prev.isupper() and i + 1 < len(part) and part[i + 1].islower():
-                        result += " "
-                result += ch
-            words.extend(w for w in result.split() if w)
-    return words
+    # Replace common delimiters with spaces
+    normalized = re.sub(r'[-_\s]+', ' ', s)
+    # Boundary between lowercase and following uppercase (camelCase)
+    normalized = re.sub(r'([a-z])([A-Z])', r'\1 \2', normalized)
+    # Boundary inside acronym followed by a word (PascalCase acronyms)
+    normalized = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', normalized)
+    return [w for w in re.split(r'\s+', normalized) if w]

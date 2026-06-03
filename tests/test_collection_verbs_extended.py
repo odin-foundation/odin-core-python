@@ -608,37 +608,30 @@ class TestFilterExtended:
 # ==========================================================================
 
 class TestEveryExtended:
-    def test_all_truthy(self):
-        assert invoke("every", [1, 2, 3])._bool_value is True
+    def test_all_match(self):
+        items = [{"v": 10}, {"v": 20}]
+        assert invoke("every", items, "v", ">", 5)._bool_value is True
 
-    def test_has_false(self):
-        assert invoke("every", [1, False, 3])._bool_value is False
+    def test_has_non_match(self):
+        items = [{"v": 10}, {"v": 1}]
+        assert invoke("every", items, "v", ">", 5)._bool_value is False
 
     def test_empty_is_true(self):
-        assert invoke("every", [])._bool_value is True
+        assert invoke("every", [], "v", ">", 5)._bool_value is True
 
     def test_with_field_truthy(self):
         items = [{"v": 10}, {"v": 20}]
-        assert invoke("every", items, "v")._bool_value is True
+        assert invoke("every", items, "v", "=", 10)._bool_value is False
 
-    def test_with_field_has_falsy(self):
-        items = [{"v": 0}, {"v": 10}]
-        assert invoke("every", items, "v")._bool_value is False
-
-    def test_with_null(self):
-        assert invoke("every", [1, None, 3])._bool_value is False
-
-    def test_with_empty_string(self):
-        assert invoke("every", ["a", "", "c"])._bool_value is False
+    def test_non_array_null(self):
+        assert invoke("every", "x", "v", "=", 1).is_null()
 
     def test_all_true_booleans(self):
-        assert invoke("every", [True, True, True])._bool_value is True
+        items = [{"v": "active"}, {"v": "active"}]
+        assert invoke("every", items, "v", "=", "active")._bool_value is True
 
     def test_single_truthy(self):
-        assert invoke("every", [1])._bool_value is True
-
-    def test_single_falsy(self):
-        assert invoke("every", [0])._bool_value is False
+        assert invoke("every", [{"v": 1}], "v", "=", 1)._bool_value is True
 
 
 # ==========================================================================
@@ -647,30 +640,33 @@ class TestEveryExtended:
 
 class TestSomeExtended:
     def test_one_matches(self):
-        assert invoke("some", [0, 0, 1])._bool_value is True
+        items = [{"v": 0}, {"v": 0}, {"v": 1}]
+        assert invoke("some", items, "v", "=", 1)._bool_value is True
 
     def test_none_match(self):
-        assert invoke("some", [0, None, ""])._bool_value is False
+        items = [{"v": 0}, {"v": 0}]
+        assert invoke("some", items, "v", "=", 1)._bool_value is False
 
     def test_empty_is_false(self):
-        assert invoke("some", [])._bool_value is False
+        assert invoke("some", [], "v", "=", 1)._bool_value is False
 
     def test_all_truthy(self):
-        assert invoke("some", [1, 2])._bool_value is True
+        items = [{"v": 1}, {"v": 2}]
+        assert invoke("some", items, "v", ">", 0)._bool_value is True
 
     def test_with_field(self):
         items = [{"v": 0}, {"v": 10}]
-        assert invoke("some", items, "v")._bool_value is True
+        assert invoke("some", items, "v", "=", 10)._bool_value is True
 
     def test_all_falsy_field(self):
         items = [{"v": 0}, {"v": 0}]
-        assert invoke("some", items, "v")._bool_value is False
+        assert invoke("some", items, "v", "=", 10)._bool_value is False
 
     def test_single_true(self):
-        assert invoke("some", [True])._bool_value is True
+        assert invoke("some", [{"v": 1}], "v", "=", 1)._bool_value is True
 
     def test_single_false(self):
-        assert invoke("some", [False])._bool_value is False
+        assert invoke("some", [{"v": 0}], "v", "=", 1)._bool_value is False
 
 
 # ==========================================================================
@@ -1383,7 +1379,7 @@ class TestPctChangeExtended:
         r = invoke("pctChange", [100, 200])
         arr = r.as_array()
         assert arr[0].is_null()
-        assert abs(arr[1]._float_value - 1.0) < 1e-10
+        assert abs(arr[1].as_float() - 1.0) < 1e-10
 
     def test_with_zero_previous(self):
         r = invoke("pctChange", [0, 100])
@@ -1403,7 +1399,7 @@ class TestPctChangeExtended:
         r = invoke("pctChange", [100, 200, 100])
         arr = r.as_array()
         assert arr[0].is_null()
-        assert abs(arr[1]._float_value - 1.0) < 1e-10
+        assert abs(arr[1].as_float() - 1.0) < 1e-10
         assert abs(arr[2]._float_value - (-0.5)) < 1e-10
 
 

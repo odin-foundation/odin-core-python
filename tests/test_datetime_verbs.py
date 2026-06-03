@@ -230,9 +230,9 @@ class TestDayOfWeek:
         assert r._int_value == 5
 
     def test_sunday(self):
-        # 2024-03-17 is Sunday -> 0
+        # 2024-03-17 is Sunday -> ISO 7
         r = invoke("dayOfWeek", "2024-03-17")
-        assert r._int_value == 0
+        assert r._int_value == 7
 
 
 # ── weekOfYear ───────────────────────────────────────────────────────

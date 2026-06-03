@@ -217,47 +217,37 @@ def _write_section_body(
         _write_section_with_dotted_keys(full_path, obj, lines, depth, modifiers)
         return
 
-    # Separate entries by type, preserving order
-    scalars: List[Tuple[str, DynValue]] = []
-    objects: List[Tuple[str, DynValue]] = []
-    arrays: List[Tuple[str, DynValue]] = []
+    # Emit scalars, arrays and flattened thin objects in declaration order;
+    # full child sections are emitted last.
+    sections: List[Tuple[str, DynValue]] = []
 
     for k, v in obj.items():
         if v.is_object():
-            objects.append((k, v))
-        elif v.is_array():
-            arrays.append((k, v))
-        else:
-            scalars.append((k, v))
-
-    # Write scalars first
-    for k, v in scalars:
-        field_path = f"{full_path}.{k}"
-        mod_prefix = _get_modifier_prefix(modifiers, field_path)
-        lines.append(f"{k} = {mod_prefix}{_format_value(v, modifiers, field_path)}")
-
-    # Write arrays (relative notation)
-    for k, v in arrays:
-        _write_tabular_array(v, lines, f".{k}", modifiers, full_path=f"{full_path}.{k}")
-
-    # Write child objects
-    for k, v in objects:
-        child_path = f"{full_path}.{k}"
-        # Flatten thin objects (all scalar, few entries) to dotted paths
-        if _should_flatten_child(v):
-            _flatten_object(k, v, scalars_out := [])
-            for dk, dv in scalars_out:
-                fp = f"{full_path}.{dk}"
-                mod_prefix = _get_modifier_prefix(modifiers, fp)
-                lines.append(f"{dk} = {mod_prefix}{_format_value(dv, modifiers, fp)}")
-        else:
-            if depth == 0:
-                # Direct children of top-level section → relative header
-                lines.append(f"{{.{k}}}")
+            if _should_flatten_child(v):
+                _flatten_object(k, v, scalars_out := [])
+                for dk, dv in scalars_out:
+                    fp = f"{full_path}.{dk}"
+                    mod_prefix = _get_modifier_prefix(modifiers, fp)
+                    lines.append(f"{dk} = {mod_prefix}{_format_value(dv, modifiers, fp)}")
             else:
-                # Deeper children → absolute path header
-                lines.append(f"{{{child_path}}}")
-            _write_section_body(child_path, v, lines, depth + 1, modifiers)
+                sections.append((k, v))
+        elif v.is_array():
+            _write_tabular_array(v, lines, f".{k}", modifiers, full_path=f"{full_path}.{k}")
+        else:
+            field_path = f"{full_path}.{k}"
+            mod_prefix = _get_modifier_prefix(modifiers, field_path)
+            lines.append(f"{k} = {mod_prefix}{_format_value(v, modifiers, field_path)}")
+
+    # Write full child sections last
+    for k, v in sections:
+        if len(v.as_object()) == 0:
+            continue
+        child_path = f"{full_path}.{k}"
+        if depth == 0:
+            lines.append(f"{{.{k}}}")
+        else:
+            lines.append(f"{{{child_path}}}")
+        _write_section_body(child_path, v, lines, depth + 1, modifiers)
 
 
 def _write_section_with_dotted_keys(

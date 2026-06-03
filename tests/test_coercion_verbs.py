@@ -83,10 +83,10 @@ def test_coerce_number_from_bool_false():
     assert r.as_int() == 0
 
 def test_coerce_number_from_null():
-    assert invoke("coerceNumber", None).is_null()
+    assert invoke("coerceNumber", None).as_int() == 0
 
 def test_coerce_number_invalid_string():
-    assert invoke("coerceNumber", "abc").is_null()
+    assert invoke("coerceNumber", "abc").as_int() == 0
 
 def test_coerce_number_no_args():
     assert invoke("coerceNumber").is_null()
@@ -119,10 +119,10 @@ def test_coerce_integer_from_bool_false():
     assert r.as_int() == 0
 
 def test_coerce_integer_from_null():
-    assert invoke("coerceInteger", None).is_null()
+    assert invoke("coerceInteger", None).as_int() == 0
 
 def test_coerce_integer_invalid():
-    assert invoke("coerceInteger", "abc").is_null()
+    assert invoke("coerceInteger", "abc").as_int() == 0
 
 def test_coerce_integer_no_args():
     assert invoke("coerceInteger").is_null()
@@ -169,7 +169,7 @@ def test_coerce_boolean_int_zero():
     assert invoke("coerceBoolean", 0).as_bool() is False
 
 def test_coerce_boolean_null():
-    assert invoke("coerceBoolean", None).is_null()
+    assert invoke("coerceBoolean", None).as_bool() is False
 
 def test_coerce_boolean_no_args():
     assert invoke("coerceBoolean").is_null()

@@ -124,11 +124,11 @@ class TestArithmetic:
 
     def test_add_null(self):
         r = invoke("add", None, 4)
-        assert r.is_null()
+        assert r.as_int() == 4
 
     def test_subtract_null(self):
         r = invoke("subtract", 10, None)
-        assert r.is_null()
+        assert r.as_int() == 10
 
     def test_missing_args(self):
         r = invoke("add", 3)
@@ -148,7 +148,7 @@ class TestAbs:
 
     def test_null(self):
         r = invoke("abs", None)
-        assert r.is_null()
+        assert_numeric(r, 0)
 
 
 # ── floor, ceil ──────────────────────────────────────────────────────

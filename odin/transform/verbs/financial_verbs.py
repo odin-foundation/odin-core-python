@@ -246,6 +246,8 @@ def verb_depreciation(args: List[DynValue], ctx: object) -> DynValue:
     life = _to_double(args[2])
     if cost is None or salvage is None or life is None or life <= 0:
         return DynValue.of_null()
+    if salvage > cost:
+        return DynValue.of_null()
     return _safe_result((cost - salvage) / life)
 
 
@@ -461,3 +463,81 @@ def verb_moving_avg(args: List[DynValue], ctx: object) -> DynValue:
         avg = sum(window_vals) / len(window_vals)
         result.append(_safe_result(avg))
     return DynValue.of_array(result)
+
+
+def _extract_days(v: DynValue) -> Optional[List[float]]:
+    """Extract an array of day numbers from dates, timestamps, or numerics."""
+    from datetime import date, datetime
+    if not v.is_array():
+        return None
+    out: List[float] = []
+    for item in v.as_array():
+        if item.type in (DynType.DATE, DynType.TIMESTAMP):
+            s = item._string_value or ""
+            try:
+                if "T" in s:
+                    dt = datetime.fromisoformat(s)
+                    out.append(dt.timestamp() / 86400.0)
+                else:
+                    d = date.fromisoformat(s[:10])
+                    out.append((d - date(1970, 1, 1)).days)
+            except ValueError:
+                out.append(float("nan"))
+        else:
+            n = coerce_num(item)
+            out.append(n if n is not None else float("nan"))
+    return out
+
+
+def _xnpv_at(rate: float, amounts: List[float], days: List[float]) -> float:
+    d0 = days[0]
+    total = 0.0
+    for amt, d in zip(amounts, days):
+        total += amt / math.pow(1 + rate, (d - d0) / 365.0)
+    return total
+
+
+def verb_xnpv(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 3:
+        return DynValue.of_null()
+    rate = _to_double(args[0])
+    if rate is None:
+        return DynValue.of_null()
+    amounts = _extract_doubles(args[1]) if args[1].is_array() else None
+    days = _extract_days(args[2])
+    if not amounts or not days or len(amounts) != len(days):
+        return DynValue.of_null()
+    if any(not math.isfinite(x) for x in amounts + days):
+        return DynValue.of_null()
+    return _safe_result(_xnpv_at(rate, amounts, days))
+
+
+def verb_xirr(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_null()
+    amounts = _extract_doubles(args[0]) if args[0].is_array() else None
+    days = _extract_days(args[1])
+    if not amounts or not days or len(amounts) < 2 or len(amounts) != len(days):
+        return DynValue.of_null()
+    if any(not math.isfinite(x) for x in amounts + days):
+        return DynValue.of_null()
+    rate = _to_double(args[2]) if len(args) >= 3 else 0.1
+    if rate is None:
+        rate = 0.1
+    d0 = days[0]
+    for _ in range(100):
+        value = 0.0
+        derivative = 0.0
+        for amt, d in zip(amounts, days):
+            exp = (d - d0) / 365.0
+            value += amt / math.pow(1 + rate, exp)
+            derivative -= (exp * amt) / math.pow(1 + rate, exp + 1)
+        if abs(value) < 1e-7:
+            return _safe_result(rate)
+        if abs(derivative) < 1e-12:
+            return DynValue.of_null()
+        nxt = rate - value / derivative
+        if not math.isfinite(nxt) or nxt <= -1:
+            return DynValue.of_null()
+        rate = nxt
+    return DynValue.of_null()

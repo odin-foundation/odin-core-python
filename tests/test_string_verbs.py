@@ -288,7 +288,7 @@ def test_slugify_basic():
     assert invoke("slugify", "Hello World!").as_string() == "hello-world"
 
 def test_slugify_accents():
-    assert invoke("slugify", "Caf\u00e9 Latt\u00e9").as_string() == "cafe-latte"
+    assert invoke("slugify", "Caf\u00e9 Latt\u00e9").as_string() == "caf-latt"
 
 def test_slugify_null():
     assert invoke("slugify", None).is_null()

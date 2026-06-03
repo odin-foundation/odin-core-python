@@ -52,30 +52,26 @@ def _get_nested(obj: DynValue, path: str) -> DynValue:
 # ── Verb implementations ────────────────────────────────────────────
 
 def verb_keys(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
-        return DynValue.of_array([])
-    obj = _extract_obj(args[0])
-    keys = _safe_keys(obj)
-    return DynValue.of_array([DynValue.of_string(k) for k in keys])
+    if len(args) < 1 or not args[0].is_object():
+        return DynValue.of_null()
+    obj = args[0].as_object()
+    return DynValue.of_array([DynValue.of_string(k) for k in _safe_keys(obj)])
 
 
 def verb_values(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
-        return DynValue.of_array([])
-    obj = _extract_obj(args[0])
-    keys = _safe_keys(obj)
-    return DynValue.of_array([obj[k] for k in keys])
+    if len(args) < 1 or not args[0].is_object():
+        return DynValue.of_null()
+    obj = args[0].as_object()
+    return DynValue.of_array([obj[k] for k in _safe_keys(obj)])
 
 
 def verb_entries(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 1:
-        return DynValue.of_array([])
-    obj = _extract_obj(args[0])
-    keys = _safe_keys(obj)
+    if len(args) < 1 or not args[0].is_object():
+        return DynValue.of_null()
+    obj = args[0].as_object()
     result = []
-    for k in keys:
-        entry = DynValue.of_array([DynValue.of_string(k), obj[k]])
-        result.append(entry)
+    for k in _safe_keys(obj):
+        result.append(DynValue.of_array([DynValue.of_string(k), obj[k]]))
     return DynValue.of_array(result)
 
 
@@ -118,3 +114,114 @@ def verb_merge(args: List[DynValue], ctx: object) -> DynValue:
     if not merged:
         return DynValue.of_null()
     return DynValue.of_object(merged)
+
+
+def verb_pick(args: List[DynValue], ctx: object) -> DynValue:
+    if not args or not args[0].is_object():
+        return DynValue.of_null()
+    src = args[0].as_object()
+    result: Dict[str, DynValue] = {}
+    for arg in args[1:]:
+        key = coerce_str(arg)
+        if key not in _UNSAFE_KEYS and key in src:
+            result[key] = src[key]
+    return DynValue.of_object(result)
+
+
+def verb_omit(args: List[DynValue], ctx: object) -> DynValue:
+    if not args or not args[0].is_object():
+        return DynValue.of_null()
+    src = args[0].as_object()
+    drop = {coerce_str(a) for a in args[1:]}
+    result: Dict[str, DynValue] = {}
+    for k in _safe_keys(src):
+        if k not in drop:
+            result[k] = src[k]
+    return DynValue.of_object(result)
+
+
+def verb_from_entries(args: List[DynValue], ctx: object) -> DynValue:
+    if not args or not args[0].is_array():
+        return DynValue.of_null()
+    result: Dict[str, DynValue] = {}
+    for entry in args[0].as_array():
+        if entry.is_array():
+            pair = entry.as_array()
+        else:
+            continue
+        if len(pair) < 2:
+            continue
+        key = coerce_str(pair[0])
+        if key not in _UNSAFE_KEYS:
+            result[key] = pair[1]
+    return DynValue.of_object(result)
+
+
+def verb_invert(args: List[DynValue], ctx: object) -> DynValue:
+    if not args or not args[0].is_object():
+        return DynValue.of_null()
+    src = args[0].as_object()
+    result: Dict[str, DynValue] = {}
+    for k in _safe_keys(src):
+        new_key = coerce_str(src[k])
+        if new_key not in _UNSAFE_KEYS:
+            result[new_key] = DynValue.of_string(k)
+    return DynValue.of_object(result)
+
+
+def verb_defaults(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_null()
+    a = args[0]
+    d = args[1]
+    if not a.is_object():
+        return d if d.is_object() else DynValue.of_null()
+    if not d.is_object():
+        return a
+    src = a.as_object()
+    defs = d.as_object()
+    result: Dict[str, DynValue] = {}
+    for k in _safe_keys(src):
+        result[k] = src[k]
+    for k in _safe_keys(defs):
+        if k not in result:
+            result[k] = defs[k]
+    return DynValue.of_object(result)
+
+
+def verb_rename_keys(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_null()
+    val = args[0]
+    mapping = args[1]
+    if not val.is_object():
+        return DynValue.of_null()
+    if not mapping.is_object():
+        return val
+    src = val.as_object()
+    rename = mapping.as_object()
+    result: Dict[str, DynValue] = {}
+    for k in _safe_keys(src):
+        new_key = coerce_str(rename[k]) if k in rename else k
+        if new_key not in _UNSAFE_KEYS:
+            result[new_key] = src[k]
+    return DynValue.of_object(result)
+
+
+def verb_compact_object(args: List[DynValue], ctx: object) -> DynValue:
+    if not args or not args[0].is_object():
+        return DynValue.of_null()
+    src = args[0].as_object()
+    result: Dict[str, DynValue] = {}
+    for k in _safe_keys(src):
+        v = src[k]
+        if v.is_null():
+            continue
+        if v.is_string() and v.as_string() == "":
+            continue
+        if v.is_array() and len(v.as_array()) == 0:
+            continue
+        if v.is_object() and len(v.as_object()) == 0:
+            continue
+        result[k] = v
+    return DynValue.of_object(result)

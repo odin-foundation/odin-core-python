@@ -155,7 +155,7 @@ def test_json_encode_object():
 
 def test_json_encode_string():
     r = invoke("jsonEncode", "hello \"world\"")
-    assert '"hello \\"world\\""' == r.as_string()
+    assert 'hello \\"world\\"' == r.as_string()
 
 def test_json_encode_null():
     assert invoke("jsonEncode", None).is_null()
@@ -167,7 +167,8 @@ def test_json_decode_object():
     assert r.get("age").as_int() == 30
 
 def test_json_decode_invalid():
-    assert invoke("jsonDecode", "not json").is_null()
+    # An invalid escape sequence cannot be unescaped as a JSON string
+    assert invoke("jsonDecode", "bad\\xescape").is_null()
 
 def test_json_decode_null():
     assert invoke("jsonDecode", None).is_null()

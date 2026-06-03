@@ -655,9 +655,9 @@ class TestEndOfYearExtended:
 # ══════════════════════════════════════════════════════════════════════
 
 class TestDayOfWeekExtended:
-    # 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+    # ISO: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
     @pytest.mark.parametrize("date_str,expected", [
-        ("2024-03-17", 0),  # Sunday
+        ("2024-03-17", 7),  # Sunday
         ("2024-03-18", 1),  # Monday
         ("2024-03-19", 2),  # Tuesday
         ("2024-03-20", 3),  # Wednesday

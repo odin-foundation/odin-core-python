@@ -62,7 +62,10 @@ MAX_INTERPOLATIONS = 320
 _INTERP_RE = _re.compile(r"\\?\$\{([^}]+)\}")
 
 # Verbs that require lazy evaluation of their branch arguments
-_LAZY_EVAL_VERBS = frozenset({"ifElse", "ternary", "switch"})
+_LAZY_EVAL_VERBS = frozenset({
+    "ifElse", "ternary", "ifNull", "ifEmpty", "coalesce",
+    "and", "or", "cond", "switch",
+})
 
 # Positional argument types for strict-type validation (subset; "number" accepts
 # number/integer/currency). Verbs absent here skip strict validation.
@@ -706,8 +709,8 @@ class TransformEngine:
                 else:
                     row_output = DynValue.of_object({})
                     for mapping in segment.mappings:
-                        if mapping.target == "_":
-                            # Side-effect only: evaluate but don't replace row
+                        if mapping.target.startswith("_"):
+                            # Computation-only sink: evaluate but don't emit
                             self._evaluate_expression(mapping.expression, ctx, item, row_output)
                         else:
                             row_output = self._process_mapping(
@@ -846,7 +849,7 @@ class TransformEngine:
             else:
                 row_output = DynValue.of_object({})
                 for mapping in segment.mappings:
-                    if mapping.target == "_":
+                    if mapping.target.startswith("_"):
                         self._evaluate_expression(mapping.expression, ctx, item, row_output)
                     else:
                         row_output = self._process_mapping(
@@ -1093,6 +1096,9 @@ class TransformEngine:
                     # Identity mapping in loop: the value IS the row itself
                     return value
                 # Non-loop: discard target, don't add to output
+            elif mapping.target.startswith("_"):
+                # Computation-only sink: ran for side effects, not emitted
+                pass
             else:
                 # Normal mapping: set the value on the output object
                 _set_path(output, mapping.target, value)
@@ -1334,9 +1340,12 @@ class TransformEngine:
             # the stable code under the onError policy.
             raise CodedTransformError(unknown_verb_error(call.verb))
 
-        # Conditional verbs need lazy evaluation of branches
-        if call.verb in _LAZY_EVAL_VERBS:
-            return self._execute_lazy_verb(call, fn, ctx, current_source, current_output)
+        # Conditional verbs need lazy evaluation of branches. Strict-types mode
+        # validates all arguments, so it evaluates eagerly.
+        if call.verb in _LAZY_EVAL_VERBS and not call.is_custom and not ctx.strict_types:
+            handled, value = self._execute_lazy_verb(call, ctx, current_source, current_output)
+            if handled:
+                return value
 
         # Evaluate arguments eagerly
         args: List[DynValue] = []
@@ -1440,56 +1449,81 @@ class TransformEngine:
     def _execute_lazy_verb(
         self,
         call: VerbCall,
-        fn,
         ctx: _ExecContext,
         current_source: DynValue,
         current_output: DynValue,
-    ) -> DynValue:
-        """Execute a conditional verb with lazy evaluation of branches.
+    ):
+        """Evaluate a control-flow verb, running only the selected branch.
 
-        For ifElse/ternary: evaluate condition, then only evaluate the selected branch.
-        For switch: evaluate the switch value, then only evaluate the matching case.
+        Returns (handled, value). When not handled, the caller evaluates eagerly.
         """
-        verb_ctx = self._make_verb_context(ctx)
-        verb_name = call.verb
+        a = call.args
+        verb = call.verb
 
-        try:
-            if verb_name in ("ifElse", "ternary") and len(call.args) >= 3:
-                # Args: condition, trueValue, falseValue
-                cond = self._evaluate_verb_arg(call.args[0], ctx, current_source, current_output)
-                if _is_truthy(cond):
-                    true_val = self._evaluate_verb_arg(call.args[1], ctx, current_source, current_output)
-                    return true_val
-                else:
-                    false_val = self._evaluate_verb_arg(call.args[2], ctx, current_source, current_output)
-                    return false_val
+        def ev(i: int) -> DynValue:
+            return self._evaluate_verb_arg(a[i], ctx, current_source, current_output)
 
-            elif verb_name == "switch" and len(call.args) >= 3:
-                # Args: value, case1, result1, case2, result2, ..., [default]
-                switch_val = self._evaluate_verb_arg(call.args[0], ctx, current_source, current_output)
-                switch_str = switch_val.as_string()
-                i = 1
-                while i + 1 < len(call.args):
-                    case_val = self._evaluate_verb_arg(call.args[i], ctx, current_source, current_output)
-                    if case_val.as_string() == switch_str:
-                        return self._evaluate_verb_arg(call.args[i + 1], ctx, current_source, current_output)
-                    i += 2
-                # Default value (odd number of remaining args)
-                if i < len(call.args):
-                    return self._evaluate_verb_arg(call.args[i], ctx, current_source, current_output)
-                return DynValue.of_null()
+        if verb in ("ifElse", "ternary"):
+            if len(a) < 3:
+                return (False, DynValue.of_null())
+            return (True, ev(1) if _is_truthy(ev(0)) else ev(2))
 
-            else:
-                # Fallback to eager evaluation
-                args = [self._evaluate_verb_arg(a, ctx, current_source, current_output) for a in call.args]
-                return fn(args, verb_ctx)
+        if verb == "ifNull":
+            if len(a) < 2:
+                return (False, DynValue.of_null())
+            v0 = ev(0)
+            return (True, ev(1) if v0.is_null() else v0)
 
-        except Exception as e:
-            ctx.errors.append(TransformError(
-                message=f"Verb '{verb_name}' error: {e}",
-                path="",
-            ))
-            return DynValue.of_null()
+        if verb == "ifEmpty":
+            if len(a) < 2:
+                return (False, DynValue.of_null())
+            v0 = ev(0)
+            empty = v0.is_null() or (v0.is_string() and v0.as_string() == "")
+            return (True, ev(1) if empty else v0)
+
+        if verb == "coalesce":
+            for i in range(len(a)):
+                v = ev(i)
+                if not v.is_null():
+                    return (True, v)
+            return (True, DynValue.of_null())
+
+        if verb == "and":
+            if len(a) < 2:
+                return (False, DynValue.of_null())
+            if not _is_truthy(ev(0)):
+                return (True, DynValue.of_bool(False))
+            return (True, DynValue.of_bool(_is_truthy(ev(1))))
+
+        if verb == "or":
+            if len(a) < 2:
+                return (False, DynValue.of_null())
+            if _is_truthy(ev(0)):
+                return (True, DynValue.of_bool(True))
+            return (True, DynValue.of_bool(_is_truthy(ev(1))))
+
+        if verb == "cond":
+            if len(a) == 0:
+                return (False, DynValue.of_null())
+            i = 0
+            while i < len(a) - 1:
+                if _is_truthy(ev(i)):
+                    return (True, ev(i + 1))
+                i += 2
+            return (True, ev(len(a) - 1) if len(a) % 2 == 1 else DynValue.of_null())
+
+        if verb == "switch":
+            if len(a) < 2:
+                return (False, DynValue.of_null())
+            subject = ev(0).as_string()
+            i = 1
+            while i < len(a) - 1:
+                if ev(i).as_string() == subject:
+                    return (True, ev(i + 1))
+                i += 2
+            return (True, ev(len(a) - 1) if (len(a) - 1) % 2 == 1 else DynValue.of_null())
+
+        return (False, DynValue.of_null())
 
     def _format_output(self, output: DynValue, transform: OdinTransform, field_modifiers: Optional[Dict[str, 'OdinModifiers']] = None, errors: Optional[List[TransformError]] = None) -> Optional[str]:
         """Format the output DynValue using the target format.

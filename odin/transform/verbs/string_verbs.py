@@ -185,12 +185,11 @@ def verb_mask(args: List[DynValue], ctx: object) -> DynValue:
     result = []
     si = 0
     for ch in pattern:
+        if si >= len(s):
+            break
         if ch == "#" or ch == "A" or ch == "*":
-            if si < len(s):
-                result.append(s[si])
-                si += 1
-            else:
-                result.append(ch)
+            result.append(s[si])
+            si += 1
         else:
             result.append(ch)
     return DynValue.of_string("".join(result))
@@ -312,13 +311,14 @@ def verb_slugify(args: List[DynValue], ctx: object) -> DynValue:
     s = coerce_str(args[0])
     if not s:
         return DynValue.of_string("")
-    # Remove accents
-    s = _remove_accents(s)
-    # Lowercase
     s = s.lower()
-    # Replace non-alphanumeric with hyphens
-    s = re.sub(r"[^a-z0-9]+", "-", s)
-    # Strip leading/trailing hyphens
+    # Drop everything that is not ASCII word char, whitespace, or hyphen
+    s = re.sub(r"[^A-Za-z0-9_\s-]", "", s)
+    # Whitespace and underscores become hyphens
+    s = re.sub(r"[\s_]+", "-", s)
+    # Collapse repeated hyphens
+    s = re.sub(r"-+", "-", s)
+    # Trim leading/trailing hyphens
     s = s.strip("-")
     return DynValue.of_string(s)
 
@@ -442,13 +442,20 @@ def verb_center(args: List[DynValue], ctx: object) -> DynValue:
     width_val = coerce_num(args[1])
     if width_val is None:
         return DynValue.of_null()
-    width = int(width_val)
+    width = int(math.floor(width_val))
     pad_char = " "
     if len(args) >= 3:
         pc = coerce_str(args[2])
         if pc:
             pad_char = pc[0]
-    return DynValue.of_string(s.center(width, pad_char))
+    if width <= 0:
+        return DynValue.of_null()
+    if len(s) >= width:
+        return DynValue.of_string(s)
+    total = width - len(s)
+    left = total // 2
+    right = total - left
+    return DynValue.of_string(pad_char * left + s + pad_char * right)
 
 
 def verb_strip_accents(args: List[DynValue], ctx: object) -> DynValue:
@@ -491,12 +498,14 @@ def verb_tokenize(args: List[DynValue], ctx: object) -> DynValue:
     if not args or args[0].is_null():
         return DynValue.of_array([])
     s = coerce_str(args[0])
-    if len(args) >= 2 and not args[1].is_null():
-        delim = coerce_str(args[1])
-        tokens = s.split(delim) if delim else s.split()
+    if not s:
+        return DynValue.of_array([])
+    delim = coerce_str(args[1]) if len(args) >= 2 else ""
+    if delim == "":
+        tokens = [t for t in s.split() if t]
     else:
-        tokens = s.split()
-    tokens = [t for t in tokens if t]
+        tokens = [t.strip() for t in s.split(delim)]
+        tokens = [t for t in tokens if t]
     return DynValue.of_array([DynValue.of_string(t) for t in tokens])
 
 
@@ -628,3 +637,65 @@ def verb_format_phone(args: List[DynValue], ctx: object) -> DynValue:
         return DynValue.of_string(f"+81 {d[:2]}-{d[2:6]}-{d[6:]}")
     else:
         return DynValue.of_string(raw)
+
+
+_HTML_ESCAPES = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}
+
+
+def verb_escape_html(args: List[DynValue], ctx: object) -> DynValue:
+    if not args:
+        return DynValue.of_null()
+    s = coerce_str(args[0])
+    return DynValue.of_string(re.sub(r"[&<>\"']", lambda m: _HTML_ESCAPES[m.group(0)], s))
+
+
+def verb_unescape_html(args: List[DynValue], ctx: object) -> DynValue:
+    if not args:
+        return DynValue.of_null()
+    s = coerce_str(args[0])
+    named = {
+        "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
+        "&apos;": "'", "&#39;": "'",
+    }
+    s = re.sub(r"&(?:amp|lt|gt|quot|apos|#39);", lambda m: named[m.group(0)], s)
+    s = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), s)
+    s = re.sub(r"&#x([0-9a-fA-F]+);", lambda m: chr(int(m.group(1), 16)), s)
+    return DynValue.of_string(s)
+
+
+def verb_escape_xml(args: List[DynValue], ctx: object) -> DynValue:
+    if not args:
+        return DynValue.of_null()
+    s = coerce_str(args[0])
+
+    def repl(m: "re.Match") -> str:
+        c = m.group(0)
+        if c == "'":
+            return "&apos;"
+        return _HTML_ESCAPES[c]
+
+    return DynValue.of_string(re.sub(r"[&<>\"']", repl, s))
+
+
+def verb_strip_tags(args: List[DynValue], ctx: object) -> DynValue:
+    if not args:
+        return DynValue.of_null()
+    s = coerce_str(args[0])
+    return DynValue.of_string(re.sub(r"<[^>]*>", "", s))
+
+
+def verb_template(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_null()
+    tpl = coerce_str(args[0])
+    src = args[1]
+    fields = src.as_object() if src.is_object() else {}
+
+    def repl(m: "re.Match") -> str:
+        key = m.group(1).strip()
+        v = fields.get(key)
+        if v is None or v.is_null():
+            return ""
+        return coerce_str(v)
+
+    return DynValue.of_string(re.sub(r"\{([^{}]+)\}", repl, tpl))

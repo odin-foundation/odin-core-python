@@ -717,7 +717,7 @@ class TestCoerceNumberExtended:
         assert r.as_float() == 0.0
 
     def test_from_null(self):
-        assert invoke("coerceNumber", None).is_null()
+        assert invoke("coerceNumber", None).as_int() == 0
 
 
 class TestCoerceIntegerExtended:
@@ -739,7 +739,7 @@ class TestCoerceIntegerExtended:
         assert invoke("coerceInteger", False).as_int() == 0
 
     def test_from_null(self):
-        assert invoke("coerceInteger", None).is_null()
+        assert invoke("coerceInteger", None).as_int() == 0
 
     def test_from_negative(self):
         assert invoke("coerceInteger", -5).as_int() == -5

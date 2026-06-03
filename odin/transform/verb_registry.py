@@ -95,6 +95,11 @@ def create_default_registry() -> VerbRegistry:
     registry.register("tokenize", string_verbs.verb_tokenize)
     registry.register("levenshtein", string_verbs.verb_levenshtein)
     registry.register("soundex", string_verbs.verb_soundex)
+    registry.register("escapeHtml", string_verbs.verb_escape_html)
+    registry.register("unescapeHtml", string_verbs.verb_unescape_html)
+    registry.register("escapeXml", string_verbs.verb_escape_xml)
+    registry.register("stripTags", string_verbs.verb_strip_tags)
+    registry.register("template", string_verbs.verb_template)
 
     # Logic verbs
     registry.register("and", logic_verbs.verb_and)
@@ -148,6 +153,15 @@ def create_default_registry() -> VerbRegistry:
     registry.register("md5", encoding_verbs.verb_md5)
     registry.register("crc32", encoding_verbs.verb_crc32)
     registry.register("jsonPath", encoding_verbs.verb_json_path)
+    registry.register("base64urlEncode", encoding_verbs.verb_base64url_encode)
+    registry.register("base64urlDecode", encoding_verbs.verb_base64url_decode)
+    registry.register("hmac", encoding_verbs.verb_hmac)
+    registry.register("parseUrl", encoding_verbs.verb_parse_url)
+    registry.register("buildUrl", encoding_verbs.verb_build_url)
+    registry.register("parseQuery", encoding_verbs.verb_parse_query)
+    registry.register("buildQuery", encoding_verbs.verb_build_query)
+    registry.register("stableStringify", encoding_verbs.verb_stable_stringify)
+    registry.register("canonicalHash", encoding_verbs.verb_canonical_hash)
 
     # Generation verbs
     registry.register("uuid", generation_verbs.verb_uuid)
@@ -188,6 +202,9 @@ def create_default_registry() -> VerbRegistry:
     registry.register("pi", numeric_verbs.verb_pi)
     registry.register("e", numeric_verbs.verb_e)
     registry.register("convertUnit", numeric_verbs.verb_convert_unit)
+    registry.register("gcd", numeric_verbs.verb_gcd)
+    registry.register("lcm", numeric_verbs.verb_lcm)
+    registry.register("factorial", numeric_verbs.verb_factorial)
 
     # Collection verbs
     registry.register("filter", collection_verbs.verb_filter)
@@ -234,6 +251,14 @@ def create_default_registry() -> VerbRegistry:
     registry.register("reduce", collection_verbs.verb_reduce)
     registry.register("pivot", collection_verbs.verb_pivot)
     registry.register("unpivot", collection_verbs.verb_unpivot)
+    registry.register("intersection", collection_verbs.verb_intersection)
+    registry.register("union", collection_verbs.verb_union)
+    registry.register("difference", collection_verbs.verb_difference)
+    registry.register("symmetricDifference", collection_verbs.verb_symmetric_difference)
+    registry.register("countBy", collection_verbs.verb_count_by)
+    registry.register("keyBy", collection_verbs.verb_key_by)
+    registry.register("explode", collection_verbs.verb_explode)
+    registry.register("window", collection_verbs.verb_window)
 
     # DateTime verbs
     registry.register("today", datetime_verbs.verb_today)
@@ -287,6 +312,8 @@ def create_default_registry() -> VerbRegistry:
     registry.register("rate", financial_verbs.verb_rate)
     registry.register("nper", financial_verbs.verb_nper)
     registry.register("depreciation", financial_verbs.verb_depreciation)
+    registry.register("xnpv", financial_verbs.verb_xnpv)
+    registry.register("xirr", financial_verbs.verb_xirr)
     registry.register("variance", financial_verbs.verb_variance)
     registry.register("varianceSample", financial_verbs.verb_variance_sample)
     registry.register("std", financial_verbs.verb_std)
@@ -312,6 +339,9 @@ def create_default_registry() -> VerbRegistry:
     registry.register("last", aggregation_verbs.verb_last)
     registry.register("accumulate", aggregation_verbs.verb_accumulate)
     registry.register("set", aggregation_verbs.verb_set)
+    registry.register("countIf", collection_verbs.verb_count_if)
+    registry.register("sumIf", collection_verbs.verb_sum_if)
+    registry.register("avgIf", collection_verbs.verb_avg_if)
 
     # Object verbs
     registry.register("keys", object_verbs.verb_keys)
@@ -320,6 +350,13 @@ def create_default_registry() -> VerbRegistry:
     registry.register("has", object_verbs.verb_has)
     registry.register("get", object_verbs.verb_get)
     registry.register("merge", object_verbs.verb_merge)
+    registry.register("pick", object_verbs.verb_pick)
+    registry.register("omit", object_verbs.verb_omit)
+    registry.register("fromEntries", object_verbs.verb_from_entries)
+    registry.register("invert", object_verbs.verb_invert)
+    registry.register("defaults", object_verbs.verb_defaults)
+    registry.register("renameKeys", object_verbs.verb_rename_keys)
+    registry.register("compactObject", object_verbs.verb_compact_object)
 
     # Geo verbs
     registry.register("distance", geo_verbs.verb_distance)

@@ -167,14 +167,7 @@ def verb_is_date(args: List[DynValue], ctx: object) -> DynValue:
     if not args:
         return DynValue.of_null()
     v = args[0]
-    if v.type in (DynType.DATE, DynType.TIMESTAMP):
-        return DynValue.of_bool(True)
-    if v.type == DynType.STRING:
-        s = (v._string_value or "").strip()
-        # Check yyyy-MM-dd pattern
-        if len(s) >= 10 and s[4:5] == "-" and s[7:8] == "-":
-            return DynValue.of_bool(True)
-    return DynValue.of_bool(False)
+    return DynValue.of_bool(v.type in (DynType.DATE, DynType.TIMESTAMP))
 
 
 def verb_type_of(args: List[DynValue], ctx: object) -> DynValue:

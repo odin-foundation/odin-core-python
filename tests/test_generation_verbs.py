@@ -100,9 +100,10 @@ def test_reset_sequence():
     engine = _engine()
     engine.invoke_verb("sequence", [_to_dyn("counter")], ctx)
     engine.invoke_verb("sequence", [_to_dyn("counter")], ctx)
-    engine.invoke_verb("resetSequence", [_to_dyn("counter")], ctx)
+    reset = engine.invoke_verb("resetSequence", [_to_dyn("counter")], ctx)
+    assert reset.as_int() == 0
     r = engine.invoke_verb("sequence", [_to_dyn("counter")], ctx)
-    assert r.as_int() == 0
+    assert r.as_int() == 1
 
 def test_reset_sequence_with_value():
     ctx = VerbContext()
@@ -110,7 +111,7 @@ def test_reset_sequence_with_value():
     engine.invoke_verb("sequence", [_to_dyn("counter")], ctx)
     engine.invoke_verb("resetSequence", [_to_dyn("counter"), _to_dyn(100)], ctx)
     r = engine.invoke_verb("sequence", [_to_dyn("counter")], ctx)
-    assert r.as_int() == 100
+    assert r.as_int() == 101
 
 
 # ── nanoid ────────────────────────────────────────────────────────────────────

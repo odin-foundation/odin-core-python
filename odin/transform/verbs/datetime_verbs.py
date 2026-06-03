@@ -341,16 +341,13 @@ def verb_end_of_year(args: List[DynValue], ctx: object) -> DynValue:
 
 
 def verb_day_of_week(args: List[DynValue], ctx: object) -> DynValue:
-    """Returns day of week: 0=Sunday, 1=Monday, ..., 6=Saturday."""
+    """Returns ISO day of week: 1=Monday, ..., 7=Sunday."""
     if len(args) < 1:
         return DynValue.of_null()
     dt = _parse_date_val(args[0])
     if dt is None:
         return DynValue.of_null()
-    # Python weekday: 0=Mon, 6=Sun. Convert to 0=Sun, 1=Mon, ..., 6=Sat
-    py_weekday = dt.weekday()  # 0=Mon
-    result = (py_weekday + 1) % 7  # 0=Sun, 1=Mon, ..., 6=Sat
-    return DynValue.of_integer(result)
+    return DynValue.of_integer(dt.isoweekday())
 
 
 def verb_day_of_month(args: List[DynValue], ctx: object) -> DynValue:

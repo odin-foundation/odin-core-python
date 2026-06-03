@@ -770,10 +770,15 @@ class TestIsDateExtended:
     """Extended isDate verb tests."""
 
     def test_valid_date_string(self):
-        assert invoke("isDate", "2024-01-15").as_bool() is True
+        from datetime import date
+        assert invoke("isDate", DynValue.of_date(date(2024, 1, 15))).as_bool() is True
 
     def test_timestamp_string(self):
-        assert invoke("isDate", "2024-01-15T10:30:00").as_bool() is True
+        from datetime import datetime
+        assert invoke("isDate", DynValue.of_timestamp(datetime(2024, 1, 15, 10, 30, 0))).as_bool() is True
+
+    def test_plain_string_is_false(self):
+        assert invoke("isDate", "2024-01-15").as_bool() is False
 
     def test_invalid_string(self):
         assert invoke("isDate", "not-a-date").as_bool() is False

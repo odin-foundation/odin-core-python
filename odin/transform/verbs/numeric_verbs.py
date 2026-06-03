@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Tuple
 
 from odin.transform.dyn_value import DynValue, DynType
-from odin.transform.verbs.helpers import coerce_num, coerce_str, numeric_result
+from odin.transform.verbs.helpers import coerce_num, coerce_str, numeric_result, to_number
 
 
 def _to_double(v: DynValue):
@@ -138,11 +138,7 @@ def verb_add(args: List[DynValue], ctx: object) -> DynValue:
         if da is None or db is None:
             return DynValue.of_null()
         return _decimal_result(da + db)
-    a = _to_double(args[0])
-    b = _to_double(args[1])
-    if a is None or b is None:
-        return DynValue.of_null()
-    return numeric_result(a + b)
+    return numeric_result(to_number(args[0]) + to_number(args[1]))
 
 
 def verb_subtract(args: List[DynValue], ctx: object) -> DynValue:
@@ -154,11 +150,7 @@ def verb_subtract(args: List[DynValue], ctx: object) -> DynValue:
         if da is None or db is None:
             return DynValue.of_null()
         return _decimal_result(da - db)
-    a = _to_double(args[0])
-    b = _to_double(args[1])
-    if a is None or b is None:
-        return DynValue.of_null()
-    return numeric_result(a - b)
+    return numeric_result(to_number(args[0]) - to_number(args[1]))
 
 
 def verb_multiply(args: List[DynValue], ctx: object) -> DynValue:
@@ -170,11 +162,7 @@ def verb_multiply(args: List[DynValue], ctx: object) -> DynValue:
         if da is None or db is None:
             return DynValue.of_null()
         return _decimal_result(da * db)
-    a = _to_double(args[0])
-    b = _to_double(args[1])
-    if a is None or b is None:
-        return DynValue.of_null()
-    return numeric_result(a * b)
+    return numeric_result(to_number(args[0]) * to_number(args[1]))
 
 
 def verb_divide(args: List[DynValue], ctx: object) -> DynValue:
@@ -186,48 +174,37 @@ def verb_divide(args: List[DynValue], ctx: object) -> DynValue:
         if da is None or db is None or db == 0:
             return DynValue.of_null()
         return DynValue.of_float(float(da / db))
-    a = _to_double(args[0])
-    b = _to_double(args[1])
-    if a is None or b is None or b == 0:
+    b = to_number(args[1])
+    if b == 0:
         return DynValue.of_null()
-    return DynValue.of_float(a / b)
+    return DynValue.of_float(to_number(args[0]) / b)
 
 
 def verb_mod(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 2:
         return DynValue.of_null()
-    a = _to_double(args[0])
-    b = _to_double(args[1])
-    if a is None or b is None or b == 0:
+    b = to_number(args[1])
+    if b == 0:
         return DynValue.of_null()
-    return numeric_result(a % b)
+    return numeric_result(math.fmod(to_number(args[0]), b))
 
 
 def verb_abs(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
         return DynValue.of_null()
-    n = _to_double(args[0])
-    if n is None:
-        return DynValue.of_null()
-    return numeric_result(abs(n))
+    return numeric_result(abs(to_number(args[0])))
 
 
 def verb_floor(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
         return DynValue.of_null()
-    n = _to_double(args[0])
-    if n is None:
-        return DynValue.of_null()
-    return numeric_result(math.floor(n))
+    return DynValue.of_integer(math.floor(to_number(args[0])))
 
 
 def verb_ceil(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
         return DynValue.of_null()
-    n = _to_double(args[0])
-    if n is None:
-        return DynValue.of_null()
-    return numeric_result(math.ceil(n))
+    return DynValue.of_integer(math.ceil(to_number(args[0])))
 
 
 def verb_round(args: List[DynValue], ctx: object) -> DynValue:
@@ -252,18 +229,13 @@ def verb_round(args: List[DynValue], ctx: object) -> DynValue:
 def verb_negate(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
         return DynValue.of_null()
-    n = _to_double(args[0])
-    if n is None:
-        return DynValue.of_null()
-    return numeric_result(-n)
+    return numeric_result(-to_number(args[0]))
 
 
 def verb_sign(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
         return DynValue.of_null()
-    n = _to_double(args[0])
-    if n is None:
-        return DynValue.of_null()
+    n = to_number(args[0])
     if n > 0:
         return DynValue.of_integer(1)
     elif n < 0:
@@ -275,10 +247,7 @@ def verb_sign(args: List[DynValue], ctx: object) -> DynValue:
 def verb_trunc(args: List[DynValue], ctx: object) -> DynValue:
     if len(args) < 1:
         return DynValue.of_null()
-    n = _to_double(args[0])
-    if n is None:
-        return DynValue.of_null()
-    return numeric_result(math.trunc(n))
+    return DynValue.of_integer(math.trunc(to_number(args[0])))
 
 
 def _string_to_seed(s: str) -> int:
@@ -316,8 +285,10 @@ def verb_random(args: List[DynValue], ctx: object) -> DynValue:
         hi = _to_double(args[1])
         seed_str = coerce_str(args[2])
         if lo is not None and hi is not None:
-            lo_i = int(lo)
-            hi_i = int(hi)
+            if lo > hi:
+                return DynValue.of_null()
+            lo_i = math.floor(lo)
+            hi_i = math.floor(hi)
             seed_val = _string_to_seed(seed_str)
             rng = _Mulberry32(seed_val)
             f = rng.next_float()
@@ -328,6 +299,8 @@ def verb_random(args: List[DynValue], ctx: object) -> DynValue:
         lo = _to_double(args[0])
         hi = _to_double(args[1])
         if lo is not None and hi is not None:
+            if lo > hi:
+                return DynValue.of_null()
             return DynValue.of_float(random.uniform(lo, hi))
     return DynValue.of_float(random.random())
 
@@ -415,35 +388,49 @@ def verb_format_locale_number(args: List[DynValue], ctx: object) -> DynValue:
     n = _to_double(args[0])
     if n is None or math.isnan(n) or math.isinf(n):
         return DynValue.of_null()
-    # Simple locale formatting (Python doesn't have Intl.NumberFormat)
-    # Just format with commas for en-US style
-    # Optional args: locale (arg[1], ignored - always en-US style), decimals (arg[2])
+    locale = coerce_str(args[1]) if len(args) >= 2 else "en-US"
+    # Separators by locale group: (thousands, decimal)
+    group, decimal = _LOCALE_SEPARATORS.get(locale.lower(), (",", "."))
     dp = -1
     if len(args) >= 3:
         d = _to_double(args[2])
         if d is not None:
-            dp = int(d)
+            dp = max(0, int(d))
     if dp >= 0:
-        formatted = f"{n:,.{dp}f}"
+        base = f"{n:,.{dp}f}"
     elif n == math.floor(n):
-        # Integer value - no decimal places
-        formatted = f"{int(n):,}"
+        base = f"{int(n):,}"
     else:
-        formatted = f"{n:,}"
-    return DynValue.of_string(formatted)
+        # Up to 3 fraction digits, trailing zeros trimmed
+        base = f"{n:,.3f}".rstrip("0").rstrip(".")
+    # Remap default en-US separators (',' group, '.' decimal) to the locale's
+    return DynValue.of_string(
+        base.replace(",", "\x00").replace(".", decimal).replace("\x00", group)
+    )
+
+
+_LOCALE_SEPARATORS = {
+    "de-de": (".", ","),
+    "fr-fr": (" ", ","),
+    "en-us": (",", "."),
+    "en-gb": (",", "."),
+}
 
 
 # ── Math functions (also registered here) ──────────────────
 
 def verb_log(args: List[DynValue], ctx: object) -> DynValue:
-    if len(args) < 2:
+    if len(args) < 1:
         return DynValue.of_null()
-    n = _to_double(args[0])
-    base = _to_double(args[1])
-    if n is None or base is None or n <= 0 or base <= 0 or base == 1:
+    n = to_number(args[0])
+    if n <= 0:
         return DynValue.of_null()
-    result = math.log(n) / math.log(base)
-    return _safe_numeric_result(result)
+    if len(args) >= 2:
+        base = to_number(args[1])
+        if base <= 0 or base == 1:
+            return DynValue.of_null()
+        return _safe_numeric_result(math.log(n) / math.log(base))
+    return _safe_numeric_result(math.log(n))
 
 
 def verb_ln(args: List[DynValue], ctx: object) -> DynValue:
@@ -582,3 +569,39 @@ def verb_convert_unit(args: List[DynValue], ctx: object) -> DynValue:
     result = n * from_factor / to_factor
     result = round(result * 1000000) / 1000000
     return _safe_numeric_result(result)
+
+
+def verb_gcd(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_null()
+    a = abs(math.trunc(to_number(args[0])))
+    b = abs(math.trunc(to_number(args[1])))
+    while b != 0:
+        a, b = b, a % b
+    return DynValue.of_integer(a)
+
+
+def verb_lcm(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 2:
+        return DynValue.of_null()
+    a = abs(math.trunc(to_number(args[0])))
+    b = abs(math.trunc(to_number(args[1])))
+    if a == 0 or b == 0:
+        return DynValue.of_integer(0)
+    x, y = a, b
+    while y != 0:
+        x, y = y, x % y
+    return DynValue.of_integer((a // x) * b)
+
+
+def verb_factorial(args: List[DynValue], ctx: object) -> DynValue:
+    if len(args) < 1:
+        return DynValue.of_null()
+    n = to_number(args[0])
+    if n != math.floor(n) or n < 0 or n > 18:
+        return DynValue.of_null()
+    n = int(n)
+    result = 1
+    for i in range(2, n + 1):
+        result *= i
+    return DynValue.of_integer(result)

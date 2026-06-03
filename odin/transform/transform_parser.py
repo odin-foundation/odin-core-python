@@ -848,7 +848,7 @@ def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List
             value = OdinVerbExpression(verb=stripped, args=value.args, is_custom=value.is_custom)
             extra_modifiers = _extract_modifier_directives(directives)
         call = _parse_verb_call(value)
-        return TransformExpression(call=call), directives, extra_modifiers
+        return _verb_call_to_expression(call), directives, extra_modifiers
 
     if isinstance(value, OdinString):
         raw = value.value
@@ -880,7 +880,7 @@ def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List
                 clean_raw = raw
             call = _parse_verb_from_string(clean_raw)
             if call:
-                return TransformExpression(call=call), directives, extra_modifiers
+                return _verb_call_to_expression(call), directives, extra_modifiers
 
         # Check for directives in the string
         directives = special + _parse_inline_directives(raw)
@@ -898,6 +898,42 @@ def _parse_value_expression(value: Any) -> Tuple[Optional[FieldExpression], List
 
     # Fallback
     return LiteralExpression(value=value), directives, extra_modifiers
+
+
+def _verb_call_to_expression(call: VerbCall):
+    """Wrap a VerbCall as a FieldExpression, expanding the %expr macro.
+
+    %expr "<formula>" [@bindings] is a parse-time macro: the formula is
+    compiled into a tree of arithmetic verbs and returned as an expression.
+    """
+    if call.verb == "expr" and not call.is_custom:
+        from odin.transform.expr import compile_expr, ExprSyntaxError
+
+        if not call.args or not isinstance(call.args[0], LiteralArg) \
+                or not isinstance(call.args[0].value, OdinString):
+            raise ExprSyntaxError("expected a quoted formula string")
+        formula = call.args[0].value.value
+        binding_path = None
+        if len(call.args) >= 2:
+            arg1 = call.args[1]
+            if not isinstance(arg1, ReferenceArg):
+                raise ExprSyntaxError(
+                    "the bindings argument must be a reference such as @.vars")
+            binding_path = arg1.path
+        node = compile_expr(formula, binding_path)
+        return _expr_node_to_expression(node)
+    return TransformExpression(call=call)
+
+
+def _expr_node_to_expression(node: VerbArg):
+    """Convert a compiled %expr argument node into a FieldExpression."""
+    if isinstance(node, VerbCallArg):
+        return TransformExpression(call=node.call)
+    if isinstance(node, ReferenceArg):
+        return CopyExpression(path=node.path)
+    if isinstance(node, LiteralArg):
+        return LiteralExpression(value=node.value)
+    return LiteralExpression(value=OdinNull())
 
 
 def _parse_verb_call(verb_expr: OdinVerbExpression) -> VerbCall:
@@ -1060,6 +1096,14 @@ _VERB_ARITY: Dict[str, int] = {
     "nextBusinessDay": 1, "formatDuration": 1,
     "formatPhone": 2, "movingAvg": 2, "businessDays": 2,
     "reduce": 3, "pivot": 3, "unpivot": 3, "convertUnit": 3,
+    "intersection": 2, "union": 2, "difference": 2, "symmetricDifference": 2,
+    "countBy": 2, "keyBy": 2, "explode": 2, "window": 2,
+    "gcd": 2, "lcm": 2, "factorial": 1,
+    "fromEntries": 1, "invert": 1, "defaults": 2, "renameKeys": 2, "compactObject": 1,
+    "escapeHtml": 1, "unescapeHtml": 1, "escapeXml": 1, "stripTags": 1, "template": 2,
+    "base64urlEncode": 1, "base64urlDecode": 1, "hmac": 3, "parseUrl": 1, "buildUrl": 1,
+    "parseQuery": 1, "buildQuery": 1, "stableStringify": 1, "canonicalHash": 1,
+    "countIf": 4, "sumIf": 5, "avgIf": 5, "xnpv": 3, "xirr": 3,
 }
 
 

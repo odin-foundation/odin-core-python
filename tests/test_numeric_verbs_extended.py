@@ -315,15 +315,15 @@ class TestAddExtended:
 
     def test_null_first(self):
         r = invoke("add", None, 5)
-        assert r.is_null()
+        assert r.as_int() == 5
 
     def test_null_second(self):
         r = invoke("add", 5, None)
-        assert r.is_null()
+        assert r.as_int() == 5
 
     def test_both_null(self):
         r = invoke("add", None, None)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_missing_args(self):
         r = invoke("add", 5)
@@ -369,11 +369,11 @@ class TestSubtractExtended:
 
     def test_null_first(self):
         r = invoke("subtract", None, 3)
-        assert r.is_null()
+        assert r.as_int() == -3
 
     def test_null_second(self):
         r = invoke("subtract", 10, None)
-        assert r.is_null()
+        assert r.as_int() == 10
 
     def test_missing_args(self):
         r = invoke("subtract", 10)
@@ -415,11 +415,11 @@ class TestMultiplyExtended:
 
     def test_null_first(self):
         r = invoke("multiply", None, 3)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_null_second(self):
         r = invoke("multiply", 3, None)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_missing_args(self):
         r = invoke("multiply", 5)
@@ -469,7 +469,7 @@ class TestDivideExtended:
 
     def test_null_first(self):
         r = invoke("divide", None, 2)
-        assert r.is_null()
+        assert r.as_float() == 0.0
 
     def test_null_second(self):
         r = invoke("divide", 10, None)
@@ -523,7 +523,7 @@ class TestModExtended:
 
     def test_null_first(self):
         r = invoke("mod", None, 3)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_null_second(self):
         r = invoke("mod", 10, None)
@@ -561,7 +561,7 @@ class TestAbsExtended:
 
     def test_null_input(self):
         r = invoke("abs", None)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_no_args(self):
         r = invoke("abs")
@@ -604,7 +604,7 @@ class TestFloorExtended:
 
     def test_null_input(self):
         r = invoke("floor", None)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_no_args(self):
         r = invoke("floor")
@@ -651,7 +651,7 @@ class TestCeilExtended:
 
     def test_null_input(self):
         r = invoke("ceil", None)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_no_args(self):
         r = invoke("ceil")
@@ -738,7 +738,7 @@ class TestNegateExtended:
 
     def test_null_input(self):
         r = invoke("negate", None)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_no_args(self):
         r = invoke("negate")
@@ -770,7 +770,7 @@ class TestSignExtended:
 
     def test_null_input(self):
         r = invoke("sign", None)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_no_args(self):
         r = invoke("sign")
@@ -807,7 +807,7 @@ class TestTruncExtended:
 
     def test_null_input(self):
         r = invoke("trunc", None)
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_no_args(self):
         r = invoke("trunc")
@@ -1172,8 +1172,9 @@ class TestLogExtended:
         assert r.is_null()
 
     def test_missing_args(self):
+        import math
         r = invoke("log", 8.0)
-        assert r.is_null()
+        assert_numeric(r, math.log(8.0), tol=1e-9)
 
     def test_no_args(self):
         r = invoke("log")
@@ -1516,11 +1517,11 @@ class TestStringCoercionExtended:
 
     def test_add_non_numeric_string_null(self):
         r = invoke("add", "abc", "def")
-        assert r.is_null()
+        assert r.as_int() == 0
 
     def test_multiply_non_numeric_string_null(self):
         r = invoke("multiply", "abc", "def")
-        assert r.is_null()
+        assert r.as_int() == 0
 
 
 # ==========================================================================
@@ -1533,13 +1534,7 @@ class TestNullHandling:
         ("formatInteger", 1),
         ("formatCurrency", 1),
         ("formatPercent", 1),
-        ("abs", 1),
-        ("floor", 1),
-        ("ceil", 1),
         ("round", 1),
-        ("negate", 1),
-        ("sign", 1),
-        ("trunc", 1),
         ("ln", 1),
         ("log10", 1),
         ("exp", 1),
@@ -1550,19 +1545,37 @@ class TestNullHandling:
         r = invoke(verb, *args)
         assert r.is_null()
 
-    @pytest.mark.parametrize("verb", [
-        "add", "subtract", "multiply", "divide", "mod",
+    @pytest.mark.parametrize("verb,expected", [
+        ("abs", 0), ("floor", 0), ("ceil", 0),
+        ("negate", 0), ("sign", 0), ("trunc", 0),
     ])
-    def test_null_first_binary(self, verb):
-        r = invoke(verb, None, 5)
-        assert r.is_null()
+    def test_null_first_arg_coerces(self, verb, expected):
+        r = invoke(verb, None)
+        assert r.as_int() == expected
 
-    @pytest.mark.parametrize("verb", [
-        "add", "subtract", "multiply", "divide", "mod",
+    @pytest.mark.parametrize("verb,expected", [
+        ("add", 5), ("subtract", -5), ("multiply", 0),
     ])
-    def test_null_second_binary(self, verb):
+    def test_null_first_binary(self, verb, expected):
+        r = invoke(verb, None, 5)
+        assert r.as_int() == expected
+
+    def test_null_first_binary_divzero(self):
+        # divide/mod by a present divisor still compute; null numerator -> 0
+        assert invoke("divide", None, 5).as_float() == 0.0
+        assert invoke("mod", None, 5).as_int() == 0
+
+    @pytest.mark.parametrize("verb,expected", [
+        ("add", 5), ("subtract", 5), ("multiply", 0),
+    ])
+    def test_null_second_binary(self, verb, expected):
         r = invoke(verb, 5, None)
-        assert r.is_null()
+        assert r.as_int() == expected
+
+    def test_null_second_binary_divzero(self):
+        # null divisor coerces to 0 -> division by zero -> null
+        assert invoke("divide", 5, None).is_null()
+        assert invoke("mod", 5, None).is_null()
 
     @pytest.mark.parametrize("verb", [
         "log", "pow",
@@ -1590,7 +1603,7 @@ class TestMissingArgs:
 
     @pytest.mark.parametrize("verb", [
         "add", "subtract", "multiply", "divide", "mod",
-        "log", "pow", "safeDivide",
+        "pow", "safeDivide",
     ])
     def test_one_arg_returns_null(self, verb):
         r = invoke(verb, 5)
