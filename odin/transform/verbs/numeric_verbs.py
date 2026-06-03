@@ -504,7 +504,7 @@ def verb_e(args: List[DynValue], ctx: object) -> DynValue:
 
 # Unit conversion families: unit -> factor relative to base unit
 _UNIT_FAMILIES: Dict[str, Dict[str, float]] = {
-    "mass": {"g": 1.0, "kg": 1000.0, "mg": 0.001, "lb": 453.592, "oz": 28.3495, "ton": 907185.0, "tonne": 1000000.0},
+    "mass": {"g": 1.0, "kg": 1000.0, "mg": 0.001, "lb": 453.59237, "oz": 28.3495, "ton": 907185.0, "tonne": 1000000.0},
     "length": {"m": 1.0, "km": 1000.0, "cm": 0.01, "mm": 0.001, "mi": 1609.344, "yd": 0.9144, "ft": 0.3048, "in": 0.0254},
     "volume": {"l": 1.0, "ml": 0.001, "gal": 3.78541, "qt": 0.946353, "pt": 0.473176, "cup": 0.236588, "floz": 0.0295735},
     "speed": {"m/s": 1.0, "km/h": 0.277778, "mph": 0.44704, "knot": 0.514444, "ft/s": 0.3048},
