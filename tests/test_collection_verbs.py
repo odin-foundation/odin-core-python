@@ -413,3 +413,149 @@ class TestJoinArray:
     def test_with_space(self):
         r = invoke("joinArray", ["hello", "world"], " ")
         assert r.as_string() == "hello world"
+
+
+def _ints(result):
+    return [item.as_int() for item in result.as_array()]
+
+
+# ── intersection ─────────────────────────────────────────────────────
+
+class TestIntersection:
+    def test_distinct_in_both(self):
+        r = invoke("intersection", [1, 2, 2, 3], [2, 3, 4])
+        assert _ints(r) == [2, 3]
+
+    def test_single_overlap(self):
+        r = invoke("intersection", [1, 2, 2, 3], [3, 5])
+        assert _ints(r) == [3]
+
+    def test_no_overlap(self):
+        r = invoke("intersection", [1, 2], [9, 8])
+        assert _ints(r) == []
+
+
+# ── union ────────────────────────────────────────────────────────────
+
+class TestUnion:
+    def test_distinct_first_order(self):
+        r = invoke("union", [1, 2, 2], [2, 3])
+        assert _ints(r) == [1, 2, 3]
+
+    def test_disjoint(self):
+        r = invoke("union", [1, 2], [3, 4])
+        assert _ints(r) == [1, 2, 3, 4]
+
+    def test_empty_first(self):
+        r = invoke("union", [], [2, 3])
+        assert _ints(r) == [2, 3]
+
+
+# ── difference ───────────────────────────────────────────────────────
+
+class TestDifference:
+    def test_only_in_first(self):
+        r = invoke("difference", [1, 1, 2, 3], [2, 3, 4])
+        assert _ints(r) == [1]
+
+    def test_no_overlap_returns_distinct_first(self):
+        r = invoke("difference", [1, 1, 2, 3], [9, 8])
+        assert _ints(r) == [1, 2, 3]
+
+
+# ── symmetricDifference ──────────────────────────────────────────────
+
+class TestSymmetricDifference:
+    def test_exclusive_to_one(self):
+        r = invoke("symmetricDifference", [1, 2, 3], [2, 3, 4])
+        assert _ints(r) == [1, 4]
+
+    def test_disjoint_returns_all(self):
+        r = invoke("symmetricDifference", [1, 2], [3, 4])
+        assert _ints(r) == [1, 2, 3, 4]
+
+    def test_dedupes_within_input(self):
+        r = invoke("symmetricDifference", [1, 1, 2], [2, 3])
+        assert _ints(r) == [1, 3]
+
+
+# ── countBy ──────────────────────────────────────────────────────────
+
+class TestCountBy:
+    def test_by_field(self):
+        r = invoke("countBy", [{"region": "east"}, {"region": "west"}, {"region": "east"}], "region")
+        obj = r.as_object()
+        assert obj["east"].as_int() == 2
+        assert obj["west"].as_int() == 1
+
+    def test_without_field_counts_items(self):
+        r = invoke("countBy", ["a", "b", "a", "a"])
+        obj = r.as_object()
+        assert obj["a"].as_int() == 3
+        assert obj["b"].as_int() == 1
+
+    def test_keys_sorted(self):
+        r = invoke("countBy", ["c", "a", "b"])
+        assert list(r.as_object().keys()) == ["a", "b", "c"]
+
+    def test_non_array(self):
+        r = invoke("countBy", "x")
+        assert r.is_null()
+
+
+# ── keyBy ────────────────────────────────────────────────────────────
+
+class TestKeyBy:
+    def test_indexes_by_field(self):
+        r = invoke("keyBy", [{"id": "u1", "name": "Ada"}, {"id": "u2", "name": "Bo"}], "id")
+        obj = r.as_object()
+        assert obj["u1"].as_object()["name"].as_string() == "Ada"
+        assert obj["u2"].as_object()["name"].as_string() == "Bo"
+
+    def test_duplicate_last_wins(self):
+        r = invoke("keyBy", [
+            {"id": "u1", "name": "Ada"},
+            {"id": "u1", "name": "Ada2"},
+        ], "id")
+        assert r.as_object()["u1"].as_object()["name"].as_string() == "Ada2"
+
+
+# ── explode ──────────────────────────────────────────────────────────
+
+class TestExplode:
+    def test_one_row_per_element(self):
+        r = invoke("explode", [{"id": "o1", "tags": ["red", "blue"]}], "tags")
+        rows = r.as_array()
+        assert len(rows) == 2
+        assert rows[0].as_object()["tags"].as_string() == "red"
+        assert rows[1].as_object()["tags"].as_string() == "blue"
+
+    def test_empty_field_emitted_once(self):
+        r = invoke("explode", [{"id": "o2", "tags": []}], "tags")
+        rows = r.as_array()
+        assert len(rows) == 1
+        assert rows[0].as_object()["id"].as_string() == "o2"
+
+    def test_missing_field_passes_through(self):
+        r = invoke("explode", [{"id": "p1"}, {"id": "p2"}], "tags")
+        rows = r.as_array()
+        assert len(rows) == 2
+        assert rows[0].as_object()["id"].as_string() == "p1"
+
+
+# ── window ───────────────────────────────────────────────────────────
+
+class TestWindow:
+    def test_pairs(self):
+        r = invoke("window", [1, 2, 3], 2)
+        windows = [_ints(w) for w in r.as_array()]
+        assert windows == [[1, 2], [2, 3]]
+
+    def test_singles(self):
+        r = invoke("window", [1, 2, 3], 1)
+        windows = [_ints(w) for w in r.as_array()]
+        assert windows == [[1], [2], [3]]
+
+    def test_window_larger_than_array(self):
+        r = invoke("window", [1, 2, 3], 5)
+        assert r.as_array() == []

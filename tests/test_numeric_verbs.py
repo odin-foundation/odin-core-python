@@ -361,3 +361,45 @@ class TestStringCoercion:
     def test_multiply_string(self):
         r = invoke("multiply", "5", "3")
         assert_numeric(r, 15)
+
+
+# ── gcd ──────────────────────────────────────────────────────────────
+
+class TestGcd:
+    def test_basic(self):
+        assert invoke("gcd", 12, 18).as_int() == 6
+
+    def test_with_zero(self):
+        assert invoke("gcd", 0, 12).as_int() == 12
+
+    def test_negative_uses_absolute(self):
+        assert invoke("gcd", -12, 18).as_int() == 6
+
+
+# ── lcm ──────────────────────────────────────────────────────────────
+
+class TestLcm:
+    def test_basic(self):
+        assert invoke("lcm", 4, 6).as_int() == 12
+
+    def test_with_zero(self):
+        assert invoke("lcm", 0, 4).as_int() == 0
+
+
+# ── factorial ────────────────────────────────────────────────────────
+
+class TestFactorial:
+    def test_five(self):
+        assert invoke("factorial", 5).as_int() == 120
+
+    def test_zero(self):
+        assert invoke("factorial", 0).as_int() == 1
+
+    def test_max_supported(self):
+        assert invoke("factorial", 18).as_int() == 6402373705728000
+
+    def test_over_range_is_null(self):
+        assert invoke("factorial", 19).is_null()
+
+    def test_negative_is_null(self):
+        assert invoke("factorial", -1).is_null()

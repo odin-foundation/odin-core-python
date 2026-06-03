@@ -130,3 +130,54 @@ class TestFirstLast:
     def test_last_empty(self):
         r = invoke("last", [])
         assert r.is_null()
+
+
+_ORDERS = [
+    {"status": "paid", "amount": 100},
+    {"status": "open", "amount": 200},
+    {"status": "paid", "amount": 300},
+]
+
+
+# ── countIf ──────────────────────────────────────────────────────────
+
+class TestCountIf:
+    def test_matches(self):
+        r = invoke("countIf", _ORDERS, "status", "=", "paid")
+        assert r.as_int() == 2
+
+    def test_no_match_is_zero(self):
+        r = invoke("countIf", _ORDERS, "status", "=", "void")
+        assert r.as_int() == 0
+
+    def test_comparison_operator(self):
+        r = invoke("countIf", _ORDERS, "amount", ">", 150)
+        assert r.as_int() == 2
+
+
+# ── sumIf ────────────────────────────────────────────────────────────
+
+class TestSumIf:
+    def test_sums_named_field(self):
+        r = invoke("sumIf", _ORDERS, "status", "=", "paid", "amount")
+        assert r.as_int() == 400
+
+    def test_no_match_is_zero(self):
+        r = invoke("sumIf", _ORDERS, "status", "=", "void", "amount")
+        assert r.as_int() == 0
+
+    def test_defaults_to_predicate_field(self):
+        r = invoke("sumIf", _ORDERS, "amount", ">", 150)
+        assert r.as_int() == 500
+
+
+# ── avgIf ────────────────────────────────────────────────────────────
+
+class TestAvgIf:
+    def test_averages_named_field(self):
+        r = invoke("avgIf", _ORDERS, "status", "=", "paid", "amount")
+        assert r.as_int() == 200
+
+    def test_no_match_is_null(self):
+        r = invoke("avgIf", _ORDERS, "status", "=", "void", "amount")
+        assert r.is_null()

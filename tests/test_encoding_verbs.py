@@ -193,3 +193,133 @@ def test_json_path_missing():
     obj = _to_dyn({"name": "Alice"})
     r = invoke("jsonPath", obj, "$.address.city")
     assert r.is_null()
+
+
+# ── base64url ────────────────────────────────────────────────────────
+
+def test_base64url_encode():
+    r = invoke("base64urlEncode", "hello world?>>")
+    assert r.as_string() == "aGVsbG8gd29ybGQ_Pj4"
+
+def test_base64url_decode():
+    r = invoke("base64urlDecode", "aGVsbG8gd29ybGQ_Pj4")
+    assert r.as_string() == "hello world?>>"
+
+def test_base64url_decode_tolerates_padding():
+    r = invoke("base64urlDecode", "SGVsbG8=")
+    assert r.as_string() == "Hello"
+
+def test_base64url_decode_empty():
+    r = invoke("base64urlDecode", "")
+    assert r.as_string() == ""
+
+def test_base64url_roundtrip():
+    r = invoke("base64urlDecode", invoke("base64urlEncode", "hello world?>>"))
+    assert r.as_string() == "hello world?>>"
+
+
+# ── hmac ─────────────────────────────────────────────────────────────
+
+def test_hmac_default_sha256():
+    r = invoke("hmac", "message", "secret")
+    assert r.as_string() == "8b5f48702995c1598c573db1e21866a9b825d4a794d169d7060a03605796360b"
+
+def test_hmac_sha1():
+    r = invoke("hmac", "message", "secret", "sha1")
+    assert r.as_string() == "0caf649feee4953d87bf903ac1176c45e028df16"
+
+def test_hmac_deterministic():
+    assert invoke("hmac", "m", "k").as_string() == invoke("hmac", "m", "k").as_string()
+
+def test_hmac_missing_key():
+    assert invoke("hmac", "message").is_null()
+
+
+# ── parseUrl ─────────────────────────────────────────────────────────
+
+def test_parse_url_full():
+    r = invoke("parseUrl", "https://example.com:8080/a/b?z=1&a=2#frag")
+    obj = r.as_object()
+    assert obj["scheme"].as_string() == "https"
+    assert obj["host"].as_string() == "example.com"
+    assert obj["port"].as_int() == 8080
+    assert obj["path"].as_string() == "/a/b"
+    assert obj["fragment"].as_string() == "frag"
+    query = obj["query"].as_object()
+    assert query["a"].as_string() == "2"
+    assert query["z"].as_string() == "1"
+    assert list(query.keys()) == ["a", "z"]
+
+def test_parse_url_null_port():
+    r = invoke("parseUrl", "https://example.com/x")
+    obj = r.as_object()
+    assert obj["port"].is_null()
+    assert obj["fragment"].as_string() == ""
+
+def test_parse_url_invalid():
+    assert invoke("parseUrl", "not a url").is_null()
+
+
+# ── buildUrl ─────────────────────────────────────────────────────────
+
+def test_build_url():
+    parts = {
+        "scheme": "https", "host": "example.com", "port": 8080,
+        "path": "/a/b", "query": {"z": 1, "a": 2}, "fragment": "frag",
+    }
+    r = invoke("buildUrl", parts)
+    assert r.as_string() == "https://example.com:8080/a/b?a=2&z=1#frag"
+
+def test_build_url_missing_scheme():
+    assert invoke("buildUrl", {"host": "example.com"}).is_null()
+
+
+# ── parseQuery ───────────────────────────────────────────────────────
+
+def test_parse_query_sorts_keys():
+    r = invoke("parseQuery", "z=1&a=2")
+    obj = r.as_object()
+    assert list(obj.keys()) == ["a", "z"]
+    assert obj["a"].as_string() == "2"
+
+def test_parse_query_leading_question_mark():
+    r = invoke("parseQuery", "?a=2")
+    assert r.as_object()["a"].as_string() == "2"
+
+
+# ── buildQuery ───────────────────────────────────────────────────────
+
+def test_build_query_sorts_keys():
+    r = invoke("buildQuery", {"z": 1, "a": 2})
+    assert r.as_string() == "a=2&z=1"
+
+def test_build_query_skips_null():
+    r = invoke("buildQuery", {"a": 1, "b": None})
+    assert r.as_string() == "a=1"
+
+
+# ── stableStringify ──────────────────────────────────────────────────
+
+def test_stable_stringify_sorts_keys_recursively():
+    r = invoke("stableStringify", {"b": 2, "a": 1, "nested": {"y": 2, "x": 1}})
+    assert r.as_string() == '{"a":1,"b":2,"nested":{"x":1,"y":2}}'
+
+def test_stable_stringify_array_order_preserved():
+    r = invoke("stableStringify", [3, 1, 2])
+    assert r.as_string() == "[3,1,2]"
+
+def test_stable_stringify_scalar():
+    r = invoke("stableStringify", 42)
+    assert r.as_string() == "42"
+
+
+# ── canonicalHash ────────────────────────────────────────────────────
+
+def test_canonical_hash_value():
+    r = invoke("canonicalHash", {"b": 2, "a": 1})
+    assert r.as_string() == "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777"
+
+def test_canonical_hash_order_independent():
+    h1 = invoke("canonicalHash", {"b": 2, "a": 1}).as_string()
+    h2 = invoke("canonicalHash", {"a": 1, "b": 2}).as_string()
+    assert h1 == h2

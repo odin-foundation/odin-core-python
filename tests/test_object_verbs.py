@@ -146,3 +146,127 @@ class TestMerge:
         assert r.is_object()
         obj = r.as_object()
         assert len(obj) == 3
+
+
+# ── pick ─────────────────────────────────────────────────────────────
+
+class TestPick:
+    def test_keeps_named_keys(self):
+        r = invoke("pick", {"name": "Ada", "role": "admin", "active": True}, "name", "role")
+        obj = r.as_object()
+        assert set(obj.keys()) == {"name", "role"}
+        assert obj["name"].as_string() == "Ada"
+        assert obj["role"].as_string() == "admin"
+
+    def test_absent_key_skipped(self):
+        r = invoke("pick", {"name": "Ada", "role": "admin"}, "name", "zzz")
+        obj = r.as_object()
+        assert set(obj.keys()) == {"name"}
+
+    def test_non_object(self):
+        r = invoke("pick", "x", "name")
+        assert r.is_null()
+
+
+# ── omit ─────────────────────────────────────────────────────────────
+
+class TestOmit:
+    def test_drops_named_keys(self):
+        r = invoke("omit", {"name": "Ada", "role": "admin", "active": True}, "active")
+        obj = r.as_object()
+        assert set(obj.keys()) == {"name", "role"}
+
+    def test_absent_key_ignored(self):
+        r = invoke("omit", {"name": "Ada", "role": "admin", "active": True}, "zzz")
+        obj = r.as_object()
+        assert set(obj.keys()) == {"name", "role", "active"}
+
+    def test_non_object(self):
+        r = invoke("omit", "x", "name")
+        assert r.is_null()
+
+
+# ── fromEntries ──────────────────────────────────────────────────────
+
+class TestFromEntries:
+    def test_pairs_to_object(self):
+        r = invoke("fromEntries", [["name", "Ada"], ["role", "admin"]])
+        obj = r.as_object()
+        assert obj["name"].as_string() == "Ada"
+        assert obj["role"].as_string() == "admin"
+
+    def test_duplicate_last_wins(self):
+        r = invoke("fromEntries", [["k", "first"], ["k", "second"]])
+        assert r.as_object()["k"].as_string() == "second"
+
+    def test_non_array(self):
+        r = invoke("fromEntries", "x")
+        assert r.is_null()
+
+
+# ── invert ───────────────────────────────────────────────────────────
+
+class TestInvert:
+    def test_swaps_keys_and_values(self):
+        r = invoke("invert", {"a": "x", "b": "y"})
+        obj = r.as_object()
+        assert obj["x"].as_string() == "a"
+        assert obj["y"].as_string() == "b"
+
+    def test_duplicate_value_last_key_wins(self):
+        r = invoke("invert", {"a": "same", "b": "same"})
+        obj = r.as_object()
+        assert set(obj.keys()) == {"same"}
+        assert obj["same"].as_string() == "b"
+
+
+# ── defaults ─────────────────────────────────────────────────────────
+
+class TestDefaults:
+    def test_fills_missing_keys_only(self):
+        r = invoke("defaults", {"name": "Ada"}, {"name": "Anon", "role": "guest"})
+        obj = r.as_object()
+        assert obj["name"].as_string() == "Ada"
+        assert obj["role"].as_string() == "guest"
+
+    def test_non_object_base_uses_defaults(self):
+        r = invoke("defaults", "x", {"name": "Anon", "role": "guest"})
+        obj = r.as_object()
+        assert obj["name"].as_string() == "Anon"
+        assert obj["role"].as_string() == "guest"
+
+
+# ── renameKeys ───────────────────────────────────────────────────────
+
+class TestRenameKeys:
+    def test_renames_via_mapping(self):
+        r = invoke("renameKeys", {"fn": "Ada", "keep": "as-is"}, {"fn": "firstName"})
+        obj = r.as_object()
+        assert obj["firstName"].as_string() == "Ada"
+        assert obj["keep"].as_string() == "as-is"
+        assert "fn" not in obj
+
+    def test_non_object(self):
+        r = invoke("renameKeys", "x", {"fn": "firstName"})
+        assert r.is_null()
+
+
+# ── compactObject ────────────────────────────────────────────────────
+
+class TestCompactObject:
+    def test_drops_empty_keeps_falsy(self):
+        r = invoke("compactObject", {
+            "name": "Ada", "middle": None, "nickname": "", "zero": 0, "flag": False,
+        })
+        obj = r.as_object()
+        assert set(obj.keys()) == {"name", "zero", "flag"}
+        assert obj["zero"].as_int() == 0
+        assert obj["flag"].as_bool() is False
+
+    def test_drops_empty_array_and_object(self):
+        r = invoke("compactObject", {"a": [], "b": {}, "c": "keep"})
+        assert set(r.as_object().keys()) == {"c"}
+
+    def test_non_object(self):
+        r = invoke("compactObject", "x")
+        assert r.is_null()

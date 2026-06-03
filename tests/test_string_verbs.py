@@ -452,3 +452,67 @@ def test_soundex_empty():
 
 def test_soundex_ashcraft():
     assert invoke("soundex", "Ashcraft").as_string() == "A261"
+
+
+# ── escapeHtml ───────────────────────────────────────────────────────
+
+def test_escape_html_specials():
+    r = invoke("escapeHtml", "<p>1 & 2</p>")
+    assert r.as_string() == "&lt;p&gt;1 &amp; 2&lt;/p&gt;"
+
+def test_escape_html_apostrophe():
+    r = invoke("escapeHtml", "it's")
+    assert r.as_string() == "it&#39;s"
+
+def test_escape_html_empty():
+    assert invoke("escapeHtml", "").as_string() == ""
+
+
+# ── unescapeHtml ─────────────────────────────────────────────────────
+
+def test_unescape_html_named():
+    r = invoke("unescapeHtml", "&lt;p&gt;1 &amp; 2&lt;/p&gt;")
+    assert r.as_string() == "<p>1 & 2</p>"
+
+def test_unescape_html_numeric_and_hex():
+    r = invoke("unescapeHtml", "&#65;&#x42;")
+    assert r.as_string() == "AB"
+
+
+# ── escapeXml ────────────────────────────────────────────────────────
+
+def test_escape_xml_apostrophe_as_apos():
+    r = invoke("escapeXml", "x = 'a' & b")
+    assert r.as_string() == "x = &apos;a&apos; &amp; b"
+
+def test_escape_xml_angles_and_quotes():
+    r = invoke("escapeXml", '<a href="u">')
+    assert r.as_string() == "&lt;a href=&quot;u&quot;&gt;"
+
+def test_escape_xml_no_specials():
+    assert invoke("escapeXml", "no specials").as_string() == "no specials"
+
+
+# ── stripTags ────────────────────────────────────────────────────────
+
+def test_strip_tags():
+    r = invoke("stripTags", "<p>Hello <b>world</b></p>")
+    assert r.as_string() == "Hello world"
+
+def test_strip_tags_no_tags():
+    assert invoke("stripTags", "no tags here").as_string() == "no tags here"
+
+
+# ── template ─────────────────────────────────────────────────────────
+
+def test_template_fills_placeholders():
+    r = invoke("template", "Hi {name}, you are {age}", {"name": "Ada", "age": 36})
+    assert r.as_string() == "Hi Ada, you are 36"
+
+def test_template_missing_key_is_empty():
+    r = invoke("template", "a{missing}b", {"name": "Ada"})
+    assert r.as_string() == "ab"
+
+def test_template_trims_whitespace_in_braces():
+    r = invoke("template", "x{ name }y", {"name": "Ada"})
+    assert r.as_string() == "xAday"

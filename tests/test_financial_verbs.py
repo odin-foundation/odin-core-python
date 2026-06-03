@@ -302,3 +302,49 @@ class TestWeightedAvg:
     def test_empty(self):
         r = invoke("weightedAvg", [], [])
         assert r.is_null()
+
+
+from datetime import date
+
+
+def _amounts(values):
+    return DynValue.of_array([DynValue.of_float(float(v)) for v in values])
+
+
+def _dates(iso_strings):
+    return DynValue.of_array([DynValue.of_date(date.fromisoformat(s)) for s in iso_strings])
+
+
+_FLOWS = [-1000.0, 110, 110, 110, 1100]
+_DATES = ["2020-01-01", "2021-01-01", "2022-01-01", "2023-01-01", "2024-01-01"]
+
+
+# ── xnpv ─────────────────────────────────────────────────────────────
+
+class TestXnpv:
+    def test_dated_cash_flows(self):
+        r = invoke("xnpv", 0.09, _amounts(_FLOWS), _dates(_DATES))
+        assert_numeric(r, 57.460446077146344, tol=1e-6)
+
+    def test_length_mismatch_is_null(self):
+        r = invoke("xnpv", 0.09, _amounts(_FLOWS), _dates(_DATES[:3]))
+        assert r.is_null()
+
+    def test_missing_args_is_null(self):
+        assert invoke("xnpv", 0.09, _amounts(_FLOWS)).is_null()
+
+
+# ── xirr ─────────────────────────────────────────────────────────────
+
+class TestXirr:
+    def test_dated_cash_flows(self):
+        r = invoke("xirr", _amounts(_FLOWS), _dates(_DATES))
+        assert_numeric(r, 0.10777982564924497, tol=1e-6)
+
+    def test_optional_guess(self):
+        r = invoke("xirr", _amounts(_FLOWS), _dates(_DATES), 0.2)
+        assert_numeric(r, 0.10777982564924497, tol=1e-6)
+
+    def test_single_flow_is_null(self):
+        r = invoke("xirr", _amounts([-1000.0]), _dates(["2020-01-01"]))
+        assert r.is_null()
