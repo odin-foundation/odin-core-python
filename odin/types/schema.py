@@ -198,6 +198,9 @@ class SchemaType:
     name: str = ""
     fields: Dict[str, SchemaField] = field(default_factory=dict)
     base_type: Optional[str] = None
+    # Array-of-object entries declared inside the type, keyed by array name
+    # (e.g. `producers` for `producers[] = @t` or `producers[].field`).
+    arrays: Dict[str, "SchemaArray"] = field(default_factory=dict)
 
 
 @dataclass
@@ -208,6 +211,9 @@ class SchemaArray:
     unique: bool = False
     item_fields: Dict[str, SchemaField] = field(default_factory=dict)
     columns: Optional[List[str]] = None
+    # For an `arr[] = @type` declaration, entry fields come from this type,
+    # resolved at validation time. Empty item_fields plus this ref.
+    item_type_ref: Optional[str] = None
 
 
 @dataclass

@@ -91,6 +91,9 @@ class SchemaParser:
             elif "=" in line:
                 self._parse_field_definition(line)
 
+        for type_def in self.types.values():
+            self._extract_type_arrays(type_def)
+
         return OdinSchema(
             metadata=self.metadata,
             types=self.types,
@@ -99,6 +102,43 @@ class SchemaParser:
             imports=self.imports,
             constraints=self.constraints,
         )
+
+    _TYPE_ARRAY_RE = re.compile(r"^([^\[\]]+)\[\](?:\.(.+))?$")
+
+    def _extract_type_arrays(self, type_def: SchemaType) -> None:
+        """Pull array-of-object entries (arr[] / arr[].field) out of a type's
+        flat field map into a type-level arrays map for per-element validation.
+        """
+        builders: Dict[str, SchemaArray] = {}
+        for key in list(type_def.fields.keys()):
+            m = self._TYPE_ARRAY_RE.match(key)
+            if not m:
+                continue
+            arr_name = m.group(1)
+            item_path = m.group(2)
+            fld = type_def.fields.pop(key)
+
+            arr = builders.get(arr_name)
+            if arr is None:
+                arr = SchemaArray(path=arr_name)
+                builders[arr_name] = arr
+
+            if item_path is None:
+                # arr[] = @type: entry fields come from the referenced type.
+                ref: Optional[str] = None
+                if isinstance(fld.field_type, TypeRefType):
+                    ref = fld.field_type.name
+                elif isinstance(fld.field_type, ReferenceType):
+                    ref = fld.field_type.target_path
+                if ref:
+                    arr.item_type_ref = ref
+            else:
+                # arr[].field: entry field declared inline.
+                fld.path = item_path
+                arr.item_fields[item_path] = fld
+
+        for name, arr in builders.items():
+            type_def.arrays[name] = arr
 
     def _parse_import(self, line: str, line_no: int) -> None:
         """Parse @import directive: @import "<path>" [as <alias>]."""

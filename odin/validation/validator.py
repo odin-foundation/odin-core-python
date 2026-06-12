@@ -942,6 +942,35 @@ def _split_typeref_members(name: str) -> List[str]:
     return [n.strip() for n in name.split("&") if n.strip()]
 
 
+def _resolve_array_item_fields(
+    schema: OdinSchema,
+    arr: SchemaArray,
+    type_registry: Optional[Dict[str, Any]] = None,
+) -> Dict[str, SchemaField]:
+    """Resolve an array's entry fields: inline item fields, or the fields of the
+    type named by item_type_ref (for the arr[] = @type form)."""
+    if arr.item_fields:
+        return arr.item_fields
+    if arr.item_type_ref:
+        ref_type = lookup_type(schema, arr.item_type_ref, type_registry)
+        if ref_type:
+            return ref_type.fields
+    return arr.item_fields
+
+
+def _present_array_indices(doc: OdinDocument, array_path: str) -> List[int]:
+    """Distinct array indices present in the document under the array path."""
+    seen: Set[int] = set()
+    prefix = array_path + "["
+    for p in doc.paths():
+        if not p.startswith(prefix):
+            continue
+        m = re.match(r"\[(\d+)\]", p[len(array_path):])
+        if m:
+            seen.add(int(m.group(1)))
+    return sorted(seen)
+
+
 def _object_present(doc: OdinDocument, path: str) -> bool:
     """True if the path itself or any descendant path holds a value."""
     if doc.get(path) is not None:
@@ -1055,6 +1084,20 @@ def _expand_type_compositions(
                 full = f"{path}.{field_name}"
                 if full not in result:
                     result[full] = _rebind(type_field, full)
+            # Expand the type's array-of-object entries under each present index
+            # so entry-level required markers are enforced (only when present).
+            for arr_name, arr in type_def.arrays.items():
+                array_path = f"{path}.{arr_name}"
+                item_fields = _resolve_array_item_fields(schema, arr, type_registry)
+                if not item_fields:
+                    continue
+                for idx in _present_array_indices(doc, array_path):
+                    for item_name, item_field in item_fields.items():
+                        if item_name == "_composition":
+                            continue
+                        full = f"{array_path}[{idx}].{item_name}"
+                        if full not in result:
+                            result[full] = _rebind(item_field, full)
 
     if result is None:
         return base_fields if base_fields is not None else {}
