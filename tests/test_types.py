@@ -672,7 +672,7 @@ class TestModuleImports:
     def test_import_odin(self):
         import odin
         assert hasattr(odin, "__version__")
-        assert odin.__version__ == "1.2.2"
+        assert odin.__version__ == "1.2.3"
 
     def test_value_types_importable(self):
         from odin import (

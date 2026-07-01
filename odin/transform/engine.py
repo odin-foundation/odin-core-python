@@ -296,9 +296,16 @@ class TransformEngine:
         self,
         registry: VerbRegistry,
         import_resolver: Optional[Callable[[str], Optional[str]]] = None,
+        max_transform_fuel: Optional[int] = None,
+        transform_timeout_ms: Optional[int] = None,
+        max_expression_depth: Optional[int] = None,
     ) -> None:
         self.registry = registry
         self.import_resolver = import_resolver
+        # Per-call guard overrides; each falls back to the global limit when None.
+        self._opt_fuel_cap = max_transform_fuel
+        self._opt_timeout_ms = transform_timeout_ms
+        self._opt_max_expr_depth = max_expression_depth
         # Execution guard state; charges only when a cap is set (> 0).
         self._fuel_cap = 0
         self._timeout_ms = 0
@@ -310,9 +317,19 @@ class TransformEngine:
 
     def _reset_guard(self) -> None:
         """Read current limits and reset per-execute guard counters."""
-        self._fuel_cap = _limits.MAX_TRANSFORM_FUEL
-        self._timeout_ms = _limits.TRANSFORM_TIMEOUT_MS
-        self._max_expr_depth = _limits.MAX_EXPRESSION_DEPTH
+        # A per-call override wins; otherwise fall back to the global limit.
+        self._fuel_cap = (
+            self._opt_fuel_cap if self._opt_fuel_cap is not None
+            else _limits.MAX_TRANSFORM_FUEL
+        )
+        self._timeout_ms = (
+            self._opt_timeout_ms if self._opt_timeout_ms is not None
+            else _limits.TRANSFORM_TIMEOUT_MS
+        )
+        self._max_expr_depth = (
+            self._opt_max_expr_depth if self._opt_max_expr_depth is not None
+            else _limits.MAX_EXPRESSION_DEPTH
+        )
         self._fuel_used = 0
         self._expr_depth = 0
         self._ops_since_clock = 0

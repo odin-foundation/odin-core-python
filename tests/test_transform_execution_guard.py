@@ -26,9 +26,9 @@ def header_with(on_error: str) -> str:
     )
 
 
-def run(body, source=None, head=HEADER):
+def run(body, source=None, head=HEADER, **opts):
     transform = parse_transform(head + body)
-    engine = TransformEngine(create_default_registry())
+    engine = TransformEngine(create_default_registry(), **opts)
     return engine.execute(transform, source if source is not None else {})
 
 
@@ -125,3 +125,41 @@ class TestNonSwallowableAbort:
         assert r.success is False
         assert any(e.code == "T016" for e in r.errors)
         assert not any(w.code == "T016" for w in r.warnings)
+
+
+class TestPerCallOverrides:
+    def test_per_call_fuel_budget_aborts_with_no_global_limit(self):
+        big = list(range(200, 0, -1))
+        r = run("{out}\nr = %sort @big", {"big": big}, max_transform_fuel=50)
+        assert r.success is False
+        assert any(e.code == "T016" for e in r.errors)
+
+    def test_per_call_fuel_overrides_a_set_global_limit(self):
+        limits.MAX_TRANSFORM_FUEL = 50
+        big = list(range(200, 0, -1))
+        r = run("{out}\nr = %sort @big", {"big": big}, max_transform_fuel=1_000_000)
+        assert r.success is True
+
+    def test_per_call_zero_opts_a_call_out_of_a_global_fuel_cap(self):
+        limits.MAX_TRANSFORM_FUEL = 50
+        big = list(range(200, 0, -1))
+        r = run("{out}\nr = %sort @big", {"big": big}, max_transform_fuel=0)
+        assert r.success is True
+
+    def test_per_call_expression_depth_cap_yields_t018(self):
+        r = run(nest_abs(30), max_expression_depth=8)
+        assert r.success is False
+        assert any(e.code == "T018" for e in r.errors)
+
+    def test_per_call_timeout_yields_t017(self):
+        state = {"clock": 0.0}
+
+        def fake_now():
+            state["clock"] += 10_000.0
+            return state["clock"]
+
+        engine_module._now_ms = fake_now
+        big = list(range(300, 0, -1))
+        r = run("{out}\nr = %sort @big", {"big": big}, transform_timeout_ms=100)
+        assert r.success is False
+        assert any(e.code == "T017" for e in r.errors)

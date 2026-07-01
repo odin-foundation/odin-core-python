@@ -56,7 +56,7 @@ from odin.types.errors import OdinError, ParseError, PatchError, ParseErrorCodes
 from odin.types.options import ParseOptions, DumpOptions, ValidateOptions
 from odin.resolver import ImportResolver, ResolverOptions, SchemaFlattener
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 __all__ = [
     # Main functions
     "parse",
@@ -600,7 +600,10 @@ def execute_transform(transform_def, source, options=None):
     Args:
         transform_def: OdinTransform object or transform text (str/bytes)
         source: Source data (dict, list, or other Python object)
-        options: Transform options (reserved for future use)
+        options: Transform options. Recognized keys/attributes:
+            import_resolver, max_transform_fuel, transform_timeout_ms,
+            max_expression_depth. Each guard override falls back to the
+            global limit when unset; 0 means unbounded for fuel and timeout.
 
     Returns:
         TransformResult with output and formatted string
@@ -611,14 +614,20 @@ def execute_transform(transform_def, source, options=None):
     if isinstance(transform_def, (str, bytes)):
         transform_def = parse_transform(transform_def)
 
-    import_resolver = None
-    if options is not None:
+    def _opt(name):
+        if options is None:
+            return None
         if isinstance(options, dict):
-            import_resolver = options.get("import_resolver")
-        else:
-            import_resolver = getattr(options, "import_resolver", None)
+            return options.get(name)
+        return getattr(options, name, None)
 
-    engine = TransformEngine(create_default_registry(), import_resolver=import_resolver)
+    engine = TransformEngine(
+        create_default_registry(),
+        import_resolver=_opt("import_resolver"),
+        max_transform_fuel=_opt("max_transform_fuel"),
+        transform_timeout_ms=_opt("transform_timeout_ms"),
+        max_expression_depth=_opt("max_expression_depth"),
+    )
     return engine.execute(transform_def, source)
 
 
