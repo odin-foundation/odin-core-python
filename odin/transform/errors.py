@@ -14,7 +14,7 @@ from odin.transform.types import TransformError, TransformWarning
 class TransformErrorCodes:
     """Transform error codes as defined in the ODIN specification.
 
-    T001-T010 are reserved for core transform errors.
+    T001-T018 are reserved for core transform errors.
     Higher codes (T011+) are for verb-level / implementation-specific errors.
     """
 
@@ -57,6 +57,15 @@ class TransformErrorCodes:
     # Field value failed a :validate / :enum / :range constraint
     T013_VALIDATION_FAILED = "T013"
 
+    # Transform fuel budget exceeded
+    T016_TRANSFORM_BUDGET_EXCEEDED = "T016"
+
+    # Transform wall-clock timeout exceeded
+    T017_TRANSFORM_TIMEOUT_EXCEEDED = "T017"
+
+    # Expression evaluation depth exceeded
+    T018_EXPRESSION_DEPTH_EXCEEDED = "T018"
+
     # Extended codes (implementation-specific)
     CONFIG_ERROR = "CONFIG_ERROR"
     UNKNOWN_RECORD_TYPE = "UNKNOWN_RECORD_TYPE"
@@ -73,6 +82,18 @@ class CodedTransformError(Exception):
 
     The mapping/loop handlers read ``.transform_error`` to preserve the code
     instead of collapsing it to TRANSFORM_ERROR.
+    """
+
+    def __init__(self, transform_error: TransformError) -> None:
+        super().__init__(transform_error.message)
+        self.transform_error = transform_error
+
+
+class TransformAbortError(Exception):
+    """Execution guard abort (fuel, timeout, or depth).
+
+    Not downgraded by the onError policy; the execute boundary surfaces
+    ``.transform_error`` as a failed result and never lets it escape.
     """
 
     def __init__(self, transform_error: TransformError) -> None:
@@ -269,6 +290,30 @@ def validation_error(message: str, field: str | None = None) -> TransformError:
         code=TransformErrorCodes.T013_VALIDATION_FAILED,
         message=message,
         path=field,
+    )
+
+
+def budget_exceeded_error(limit: int) -> TransformError:
+    """Create a T016 Transform Budget Exceeded error."""
+    return TransformError(
+        code=TransformErrorCodes.T016_TRANSFORM_BUDGET_EXCEEDED,
+        message=f"Transform fuel budget exceeded (limit {limit})",
+    )
+
+
+def timeout_exceeded_error(limit_ms: int) -> TransformError:
+    """Create a T017 Transform Timeout Exceeded error."""
+    return TransformError(
+        code=TransformErrorCodes.T017_TRANSFORM_TIMEOUT_EXCEEDED,
+        message=f"Transform timeout exceeded (limit {limit_ms}ms)",
+    )
+
+
+def expression_depth_exceeded_error(limit: int) -> TransformError:
+    """Create a T018 Expression Depth Exceeded error."""
+    return TransformError(
+        code=TransformErrorCodes.T018_EXPRESSION_DEPTH_EXCEEDED,
+        message=f"Expression evaluation depth exceeded (limit {limit})",
     )
 
 

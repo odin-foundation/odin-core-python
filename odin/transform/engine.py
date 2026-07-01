@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from odin.transform.dyn_value import DynValue, DynType
@@ -43,8 +45,13 @@ from odin.transform.errors import (
     invalid_verb_args_error,
     invalid_modifier_warning,
     position_overflow_warning,
+    budget_exceeded_error,
+    timeout_exceeded_error,
+    expression_depth_exceeded_error,
     CodedTransformError,
+    TransformAbortError,
 )
+from odin.transform import limits as _limits
 from odin.transform.verbs.collection_verbs import _check_filter_condition
 from odin.types.document import OdinModifiers
 from odin.types.values import (
@@ -66,6 +73,32 @@ _LAZY_EVAL_VERBS = frozenset({
     "ifElse", "ternary", "ifNull", "ifEmpty", "coalesce",
     "and", "or", "cond", "switch",
 })
+
+# Verbs whose cost grows with an array argument. Charged proportional to the
+# array width so large-array work cannot escape the budget.
+_SORT_VERBS = frozenset({"sort"})
+_WIDTH_VERBS = frozenset({
+    "distinct", "groupBy", "keyBy", "countBy", "reduce",
+    "sum", "avg", "min", "max", "count", "sumIf", "avgIf", "countIf",
+    "union", "intersection", "difference", "symmetricDifference",
+    "map", "filter", "window", "explode", "flatten", "reverse",
+})
+
+# Read the wall clock once per this many charged units.
+_CLOCK_CHECK_INTERVAL = 1024
+
+
+def _now_ms() -> float:
+    """Current monotonic wall clock in milliseconds."""
+    return time.monotonic() * 1000.0
+
+
+def _first_array_width(args: List["DynValue"]) -> int:
+    """Length of the first array-typed argument, or 0 if none."""
+    for arg in args:
+        if arg is not None and arg.is_array():
+            return len(arg.as_array())
+    return 0
 
 # Positional argument types for strict-type validation (subset; "number" accepts
 # number/integer/currency). Verbs absent here skip strict validation.
@@ -266,9 +299,64 @@ class TransformEngine:
     ) -> None:
         self.registry = registry
         self.import_resolver = import_resolver
+        # Execution guard state; charges only when a cap is set (> 0).
+        self._fuel_cap = 0
+        self._timeout_ms = 0
+        self._max_expr_depth = _limits.MAX_EXPRESSION_DEPTH
+        self._fuel_used = 0
+        self._expr_depth = 0
+        self._ops_since_clock = 0
+        self._start_time = 0.0
+
+    def _reset_guard(self) -> None:
+        """Read current limits and reset per-execute guard counters."""
+        self._fuel_cap = _limits.MAX_TRANSFORM_FUEL
+        self._timeout_ms = _limits.TRANSFORM_TIMEOUT_MS
+        self._max_expr_depth = _limits.MAX_EXPRESSION_DEPTH
+        self._fuel_used = 0
+        self._expr_depth = 0
+        self._ops_since_clock = 0
+        self._start_time = _now_ms() if self._timeout_ms > 0 else 0.0
+
+    def _charge(self, units: int) -> None:
+        """Charge fuel and, at a coarse interval, the wall clock.
+
+        Both are no-ops unless their cap is set (> 0), so unbounded transforms
+        pay nothing.
+        """
+        if self._fuel_cap > 0:
+            self._fuel_used += units
+            if self._fuel_used > self._fuel_cap:
+                raise TransformAbortError(budget_exceeded_error(self._fuel_cap))
+        if self._timeout_ms > 0:
+            self._ops_since_clock += units
+            if self._ops_since_clock >= _CLOCK_CHECK_INTERVAL:
+                self._ops_since_clock = 0
+                if _now_ms() - self._start_time > self._timeout_ms:
+                    raise TransformAbortError(timeout_exceeded_error(self._timeout_ms))
+
+    def _charge_verb_width(self, verb: str, args: List[DynValue]) -> None:
+        """Charge width for a verb doing O(n)/O(n log n) work over an array arg."""
+        if self._fuel_cap <= 0 and self._timeout_ms <= 0:
+            return
+        n = _first_array_width(args)
+        if n <= 0:
+            return
+        if verb in _SORT_VERBS:
+            self._charge(n * math.ceil(math.log2(max(n, 2))))
+        elif verb in _WIDTH_VERBS:
+            self._charge(n)
+
+    def _enter_eval(self) -> None:
+        """Increment evaluation depth, aborting a clean error before native limits."""
+        self._expr_depth += 1
+        if self._expr_depth > self._max_expr_depth:
+            self._expr_depth -= 1
+            raise TransformAbortError(expression_depth_exceeded_error(self._max_expr_depth))
 
     def execute(self, transform: OdinTransform, source: Any) -> TransformResult:
         """Execute a transform on source data."""
+        self._reset_guard()
         if self.import_resolver is not None and transform.imports:
             self._resolve_imports(transform, self.import_resolver)
         # Check for multi-record discriminator mode
@@ -297,17 +385,20 @@ class TransformEngine:
         # break at pass boundaries.
         pass_groups = _group_segments_by_pass(transform.segments)
 
-        is_first = True
-        for _pass_num, group in pass_groups:
-            if not is_first:
-                # Reset non-persist accumulators on pass change
-                for name, acc_def in transform.accumulators.items():
-                    if not acc_def.persist:
-                        ctx.accumulators[name] = _odin_value_to_dyn(acc_def.initial)
-            is_first = False
+        try:
+            is_first = True
+            for _pass_num, group in pass_groups:
+                if not is_first:
+                    # Reset non-persist accumulators on pass change
+                    for name, acc_def in transform.accumulators.items():
+                        if not acc_def.persist:
+                            ctx.accumulators[name] = _odin_value_to_dyn(acc_def.initial)
+                is_first = False
 
-            output = self._process_segment_list(group, ctx, output, "")
-            ctx.global_output = output
+                output = self._process_segment_list(group, ctx, output, "")
+                ctx.global_output = output
+        except TransformAbortError as err:
+            return self._abort_result(err, output, ctx)
 
         # Consolidate indexed segments (e.g., vehicles[0], vehicles[1] → vehicles array)
         output = _consolidate_indexed_keys(output)
@@ -325,6 +416,20 @@ class TransformEngine:
             success=len(ctx.errors) == 0,
             output=output,
             formatted=formatted,
+            errors=ctx.errors,
+            warnings=ctx.warnings,
+            output_modifiers=ctx.field_modifiers,
+        )
+
+    def _abort_result(
+        self, err: TransformAbortError, output: DynValue, ctx: _ExecContext,
+    ) -> TransformResult:
+        """Surface a guard abort as a failed result, never thrown past execute."""
+        ctx.errors.append(err.transform_error)
+        return TransformResult(
+            success=False,
+            output=output,
+            formatted="",
             errors=ctx.errors,
             warnings=ctx.warnings,
             output_modifiers=ctx.field_modifiers,
@@ -483,13 +588,18 @@ class TransformEngine:
 
             # Process segment mappings
             record_output = DynValue.of_object({})
-            for mapping in seg.mappings:
-                # Skip _type mapping (it's the discriminator, not an output field)
-                if mapping.target == "_type":
-                    continue
-                record_output = self._process_mapping(
-                    mapping, record_ctx, record_source, record_output, ""
-                )
+            try:
+                for mapping in seg.mappings:
+                    # Skip _type mapping (it's the discriminator, not an output field)
+                    if mapping.target == "_type":
+                        continue
+                    record_output = self._process_mapping(
+                        mapping, record_ctx, record_source, record_output, ""
+                    )
+            except TransformAbortError as err:
+                ctx.errors.extend(record_ctx.errors)
+                ctx.warnings.extend(record_ctx.warnings)
+                return self._abort_result(err, output, ctx)
 
             # Merge errors/warnings and modifiers from record context
             ctx.errors.extend(record_ctx.errors)
@@ -1111,6 +1221,9 @@ class TransformEngine:
                     )
                     ctx.field_modifiers[full_key] = mapping.modifiers
 
+        except TransformAbortError:
+            # Guard aborts are not downgraded by onError.
+            raise
         except CodedTransformError as e:
             # Coded errors carry a stable T-code; preserve it under fail/warn.
             err = e.transform_error
@@ -1145,6 +1258,23 @@ class TransformEngine:
         if expr is None:
             return DynValue.of_null()
 
+        # Guard boundary: enforce depth and charge one base unit per node.
+        self._enter_eval()
+        self._charge(1)
+        try:
+            return self._evaluate_expression_inner(
+                expr, ctx, current_source, current_output,
+            )
+        finally:
+            self._expr_depth -= 1
+
+    def _evaluate_expression_inner(
+        self,
+        expr: FieldExpression,
+        ctx: _ExecContext,
+        current_source: DynValue,
+        current_output: DynValue,
+    ) -> DynValue:
         if isinstance(expr, CopyExpression):
             return self._evaluate_copy(expr, ctx, current_source, current_output)
 
@@ -1327,6 +1457,24 @@ class TransformEngine:
         current_source: DynValue,
         current_output: DynValue,
     ) -> DynValue:
+        # Guard boundary: nested verb calls recurse here, so charge and enforce
+        # depth on entry, decrementing on exit.
+        self._enter_eval()
+        self._charge(1)
+        try:
+            return self._execute_verb_call_inner(
+                call, ctx, current_source, current_output,
+            )
+        finally:
+            self._expr_depth -= 1
+
+    def _execute_verb_call_inner(
+        self,
+        call: VerbCall,
+        ctx: _ExecContext,
+        current_source: DynValue,
+        current_output: DynValue,
+    ) -> DynValue:
         if ctx.verb_registry is None:
             return DynValue.of_null()
 
@@ -1352,6 +1500,9 @@ class TransformEngine:
         for arg in call.args:
             args.append(self._evaluate_verb_arg(arg, ctx, current_source, current_output))
 
+        # Charge width once the array argument is known.
+        self._charge_verb_width(call.verb, args)
+
         # Strict type validation (T002) when enabled.
         if ctx.strict_types and not call.is_custom:
             type_error = _validate_verb_arg_types(call.verb, args)
@@ -1363,6 +1514,8 @@ class TransformEngine:
 
         try:
             return fn(args, verb_ctx)
+        except TransformAbortError:
+            raise
         except Exception as e:
             ctx.errors.append(TransformError(
                 message=f"Verb '{call.verb}' error: {e}",
@@ -1420,9 +1573,14 @@ class TransformEngine:
         if fn is None:
             return DynValue.of_null()
 
+        # Charge width once the array argument is known.
+        self._charge_verb_width(call.verb, args)
+
         verb_ctx = self._make_verb_context(ctx)
         try:
             return fn(args, verb_ctx)
+        except TransformAbortError:
+            raise
         except Exception as e:
             ctx.errors.append(TransformError(
                 message=f"Verb '{call.verb}' error: {e}",

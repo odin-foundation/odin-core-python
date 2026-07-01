@@ -56,7 +56,7 @@ from odin.types.errors import OdinError, ParseError, PatchError, ParseErrorCodes
 from odin.types.options import ParseOptions, DumpOptions, ValidateOptions
 from odin.resolver import ImportResolver, ResolverOptions, SchemaFlattener
 
-__version__ = "1.0.5"
+__version__ = "1.2.2"
 __all__ = [
     # Main functions
     "parse",

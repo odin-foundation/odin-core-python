@@ -1150,7 +1150,7 @@ class TestModule:
     """Module-level attributes and exports."""
 
     def test_version(self):
-        assert odin.__version__ == "1.0.5"
+        assert odin.__version__ == "1.2.2"
 
     def test_all_exports(self):
         assert "parse" in odin.__all__
